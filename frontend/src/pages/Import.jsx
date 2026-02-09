@@ -1,9 +1,9 @@
-// src/pages/Import.jsx
 import React, { useState, useEffect } from 'react';
 import { 
   Search, Filter, Download, Upload, Check, 
-  X, ChevronLeft, ChevronRight, Database 
+  X, ChevronLeft, ChevronRight, Database, RefreshCw, Eye, Users
 } from 'lucide-react';
+
 import Header from '../components/Header';
 import Card from '../components/Card';
 import Button from '../components/Button';
@@ -14,10 +14,9 @@ const Import = () => {
   const [selectedRecipients, setSelectedRecipients] = useState(new Set());
   const [filters, setFilters] = useState({
     search: '',
-    category: '',
-    subcategory: '',
-    minDate: '',
-    maxDate: '',
+    x_activitec: '',
+    active_only: true,
+    has_email: true,
   });
   const [pagination, setPagination] = useState({
     page: 1,
@@ -28,62 +27,43 @@ const Import = () => {
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [categories, setCategories] = useState([]);
-  const [selectionType, setSelectionType] = useState('selected'); // 'selected', 'filtered', 'all'
+  const [stats, setStats] = useState(null);
+  const [previewRecipient, setPreviewRecipient] = useState(null);
 
   useEffect(() => {
     fetchRecipients();
-    fetchCategories();
+    fetchStats();
   }, [filters, pagination.page]);
 
-  const fetchRecipients = async () => {
-    try {
-      setLoading(true);
-      const params = {
-        ...filters,
-        page: pagination.page,
-        page_size: pagination.pageSize,
-      };
-      
-      const response = await sourceAPI.browseRecipients(params);
-      const data = response.data;
-      
-      setRecipients(data.recipients || []);
-      setPagination(data.pagination || pagination);
-      setCategories(data.filters?.categories || []);
-    } catch (error) {
-      console.error('Error fetching recipients:', error);
-      alert('Failed to load recipients');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchCategories = async () => {
-    try {
-      const response = await sourceAPI.getStats();
-      // Extract categories from stats or recipients
-    } catch (error) {
-      console.error('Error fetching categories:', error);
-    }
-  };
-
-  const toggleSelectAll = () => {
-    if (selectedRecipients.size === recipients.length) {
-      setSelectedRecipients(new Set());
+  // src/pages/Import.jsx (partial fix)
+const fetchRecipients = async () => {
+  try {
+    setLoading(true);
+    const params = {
+      ...filters,
+      page: pagination.page,
+      page_size: pagination.pageSize,
+    };
+    
+    const response = await sourceAPI.browse(params);
+    // Now response is already the data object from axios interceptor
+    if (response.success) {
+      setRecipients(response.data || []);
+      setPagination(prev => ({
+        ...prev,
+        totalCount: response.pagination?.total || 0,
+        totalPages: response.pagination?.pages || 1
+      }));
     } else {
-      setSelectedRecipients(new Set(recipients.map(r => r.email)));
+      alert(response.error || 'Failed to load recipients');
     }
-  };
-
-  const toggleSelectRecipient = (email) => {
-    const newSelected = new Set(selectedRecipients);
-    if (newSelected.has(email)) {
-      newSelected.delete(email);
-    } else {
-      newSelected.add(email);
-    }
-    setSelectedRecipients(newSelected);
-  };
+  } catch (error) {
+    console.error('Error fetching recipients:', error);
+    alert('Failed to load recipients from source database');
+  } finally {
+    setLoading(false);
+  }
+};
 
   const handleImport = async () => {
     if (selectedRecipients.size === 0) {
@@ -94,44 +74,70 @@ const Import = () => {
     try {
       setImporting(true);
       
-      let importData;
-      if (selectionType === 'selected') {
-        importData = {
-          selection_type: 'selected',
-          selected_emails: Array.from(selectedRecipients),
-        };
-      } else if (selectionType === 'filtered') {
-        importData = {
-          selection_type: 'filtered',
-          filters: {
-            category: filters.category,
-            subcategory: filters.subcategory,
-            search: filters.search,
-          },
-        };
-      } else {
-        importData = {
-          selection_type: 'all',
-          limit: 100,
-        };
-      }
+      // Convert Set to Array and prepare data
+      const selectedIds = Array.from(selectedRecipients);
+      
+      console.log('Selected IDs for import:', selectedIds);
+      console.log('Current filters:', filters);
+      
+      const importData = {
+        ids: selectedIds,
+        x_activitec: filters.x_activitec || '',
+        limit: 100,
+      };
 
+      console.log('Sending import data:', importData);
+      
       const response = await sourceAPI.importRecipients(importData);
-      const result = response.data;
-
-      alert(`Successfully imported ${result.total_imported} recipients`);
+      console.log('Import API response:', response);
       
-      // Clear selection
-      setSelectedRecipients(new Set());
-      
-      // Refresh recipients
-      fetchRecipients();
+      if (response.success) {
+        alert(`Successfully imported ${response.total_imported || 0} recipients`);
+        console.log('Import details:', response.imported);
+        console.log('Import errors:', response.errors);
+        
+        // Clear selection
+        setSelectedRecipients(new Set());
+        
+        // Refresh recipients
+        fetchRecipients();
+      } else {
+        alert(response.error || 'Failed to import recipients');
+      }
     } catch (error) {
       console.error('Error importing recipients:', error);
-      alert('Failed to import recipients');
+      console.error('Error details:', error.response || error);
+      alert(error.error || error.message || 'Failed to import recipients');
     } finally {
       setImporting(false);
     }
+  };
+
+  const fetchStats = async () => {
+    try {
+      const response = await sourceAPI.getStats();
+      setStats(response.data);
+    } catch (error) {
+      console.error('Error fetching stats:', error);
+    }
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedRecipients.size === recipients.length) {
+      setSelectedRecipients(new Set());
+    } else {
+      setSelectedRecipients(new Set(recipients.map(r => r.id || r.email)));
+    }
+  };
+
+  const toggleSelectRecipient = (id) => {
+    const newSelected = new Set(selectedRecipients);
+    if (newSelected.has(id)) {
+      newSelected.delete(id);
+    } else {
+      newSelected.add(id);
+    }
+    setSelectedRecipients(newSelected);
   };
 
   const handleFilterChange = (key, value) => {
@@ -145,77 +151,75 @@ const Import = () => {
     }
   };
 
-  const getCategoryOptions = () => {
-    const uniqueCategories = [...new Set(categories.map(c => c.category))];
-    return uniqueCategories.map(cat => ({
-      value: cat,
-      label: cat,
-    }));
+  const getUniqueCategories = () => {
+    const uniqueCats = [...new Set(recipients
+      .map(r => r.x_activitec)
+      .filter(Boolean))];
+    return uniqueCats;
   };
 
-  const getSubcategoryOptions = () => {
-    if (!filters.category) return [];
-    return categories
-      .filter(c => c.category === filters.category)
-      .map(c => ({
-        value: c.subcategory,
-        label: c.subcategory,
-      }));
+  // Preview recipient details
+  const showPreview = (recipient) => {
+    setPreviewRecipient(recipient);
   };
 
   return (
     <div>
       <Header
-        title="Import Recipients"
-        description="Browse and import recipients from source database"
+        title="Import from Source Database"
+        description="Browse and import recipients from your production database"
       />
+
+      {/* Stats Bar */}
+      {stats && (
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+          <Card className="bg-blue-50">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-blue-700">Source Database</p>
+                <p className="text-2xl font-bold text-blue-800">{stats.total_recipients || 0}</p>
+                <p className="text-xs text-blue-600">Total recipients</p>
+              </div>
+              <Database className="text-blue-600" size={24} />
+            </div>
+          </Card>
+          <Card className="bg-green-50">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-green-700">Active with Email</p>
+                <p className="text-2xl font-bold text-green-800">{stats.active_with_email || 0}</p>
+                <p className="text-xs text-green-600">Ready for import</p>
+              </div>
+              <Check className="text-green-600" size={24} />
+            </div>
+          </Card>
+          <Card className="bg-purple-50">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-purple-700">Categories</p>
+                <p className="text-2xl font-bold text-purple-800">{stats.categories_count || 0}</p>
+                <p className="text-xs text-purple-600">Unique x_activitec</p>
+              </div>
+              <Filter className="text-purple-600" size={24} />
+            </div>
+          </Card>
+          <Card className="bg-yellow-50">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-yellow-700">Selected</p>
+                <p className="text-2xl font-bold text-yellow-800">{selectedRecipients.size}</p>
+                <p className="text-xs text-yellow-600">For import</p>
+              </div>
+              <Users className="text-yellow-600" size={24} />
+            </div>
+          </Card>
+        </div>
+      )}
 
       <div className="space-y-6">
         {/* Filters Card */}
         <Card title="Filters & Selection">
           <div className="space-y-6">
-            {/* Selection Type */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-3">
-                Import Selection
-              </label>
-              <div className="flex gap-4">
-                <label className="flex items-center">
-                  <input
-                    type="radio"
-                    name="selectionType"
-                    value="selected"
-                    checked={selectionType === 'selected'}
-                    onChange={(e) => setSelectionType(e.target.value)}
-                    className="mr-2"
-                  />
-                  <span>Selected Only ({selectedRecipients.size})</span>
-                </label>
-                <label className="flex items-center">
-                  <input
-                    type="radio"
-                    name="selectionType"
-                    value="filtered"
-                    checked={selectionType === 'filtered'}
-                    onChange={(e) => setSelectionType(e.target.value)}
-                    className="mr-2"
-                  />
-                  <span>All Matching Filters</span>
-                </label>
-                <label className="flex items-center">
-                  <input
-                    type="radio"
-                    name="selectionType"
-                    value="all"
-                    checked={selectionType === 'all'}
-                    onChange={(e) => setSelectionType(e.target.value)}
-                    className="mr-2"
-                  />
-                  <span>All Active Recipients</span>
-                </label>
-              </div>
-            </div>
-
             {/* Filters */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div>
@@ -226,7 +230,7 @@ const Import = () => {
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
                   <input
                     type="text"
-                    placeholder="Name, email, or company"
+                    placeholder="Name, email, or city"
                     value={filters.search}
                     onChange={(e) => handleFilterChange('search', e.target.value)}
                     className="pl-10 pr-3 py-2 w-full border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
@@ -236,20 +240,17 @@ const Import = () => {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Category
+                  x_activitec (Category)
                 </label>
                 <select
-                  value={filters.category}
-                  onChange={(e) => {
-                    handleFilterChange('category', e.target.value);
-                    handleFilterChange('subcategory', '');
-                  }}
+                  value={filters.x_activitec}
+                  onChange={(e) => handleFilterChange('x_activitec', e.target.value)}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                 >
                   <option value="">All Categories</option>
-                  {getCategoryOptions().map(option => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
+                  {getUniqueCategories().map((cat, index) => (
+                    <option key={index} value={cat}>
+                      {cat}
                     </option>
                   ))}
                 </select>
@@ -257,64 +258,62 @@ const Import = () => {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Subcategory
+                  Status
                 </label>
                 <select
-                  value={filters.subcategory}
-                  onChange={(e) => handleFilterChange('subcategory', e.target.value)}
-                  disabled={!filters.category}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
+                  value={filters.active_only}
+                  onChange={(e) => handleFilterChange('active_only', e.target.value === 'true')}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                 >
-                  <option value="">All Subcategories</option>
-                  {getSubcategoryOptions().map(option => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
+                  <option value="true">Active Only</option>
+                  <option value="false">All Status</option>
                 </select>
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Date Range
+                  Email Filter
                 </label>
-                <div className="flex gap-2">
-                  <input
-                    type="date"
-                    value={filters.minDate}
-                    onChange={(e) => handleFilterChange('minDate', e.target.value)}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                  />
-                  <input
-                    type="date"
-                    value={filters.maxDate}
-                    onChange={(e) => handleFilterChange('maxDate', e.target.value)}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                  />
-                </div>
+                <select
+                  value={filters.has_email}
+                  onChange={(e) => handleFilterChange('has_email', e.target.value === 'true')}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                >
+                  <option value="true">Has Email</option>
+                  <option value="false">All Records</option>
+                </select>
               </div>
             </div>
 
             {/* Actions */}
             <div className="flex justify-between items-center pt-4 border-t border-gray-200">
-              <div className="text-sm text-gray-600">
-                Showing {recipients.length} of {pagination.totalCount} recipients
-              </div>
-              <div className="flex gap-3">
+              <div className="flex items-center gap-3">
                 <Button
                   variant="outline"
                   onClick={toggleSelectAll}
                 >
-                  {selectedRecipients.size === recipients.length ? 'Deselect All' : 'Select All'}
+                  {selectedRecipients.size === recipients.length && recipients.length > 0 ? 'Deselect All' : 'Select All'}
                 </Button>
+                <Button
+                  variant="outline"
+                  onClick={fetchRecipients}
+                >
+                  <RefreshCw size={16} />
+                  Refresh
+                </Button>
+              </div>
+              <div className="flex gap-3">
+                <div className="text-sm text-gray-600">
+                  Showing {recipients.length} of {pagination.totalCount} recipients
+                </div>
                 <Button
                   variant="primary"
                   onClick={handleImport}
                   loading={importing}
-                  disabled={selectionType === 'selected' && selectedRecipients.size === 0}
+                  disabled={selectedRecipients.size === 0}
                 >
                   <Upload size={16} />
-                  Import {selectionType === 'selected' ? `(${selectedRecipients.size})` : ''}
+                  Import Selected ({selectedRecipients.size})
                 </Button>
               </div>
             </div>
@@ -322,7 +321,7 @@ const Import = () => {
         </Card>
 
         {/* Recipients Table */}
-        <Card title="Recipients List">
+        <Card title="Source Database Recipients">
           {loading ? (
             <div className="flex items-center justify-center h-64">
               <div className="text-center">
@@ -345,51 +344,72 @@ const Import = () => {
                       <th className="text-left py-3 px-4 w-12">
                         <input
                           type="checkbox"
-                          checked={selectedRecipients.size === recipients.length}
+                          checked={selectedRecipients.size === recipients.length && recipients.length > 0}
                           onChange={toggleSelectAll}
                           className="rounded border-gray-300"
                         />
                       </th>
+                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">ID</th>
                       <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Name</th>
                       <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Email</th>
-                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Company</th>
-                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Category</th>
-                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Last Interaction</th>
+                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">x_activitec</th>
+                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">City</th>
+                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Active</th>
+                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Last Update</th>
+                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {recipients.map((recipient) => (
+                    {recipients.map((recipient, index) => (
                       <tr 
-                        key={recipient.email}
+                        key={recipient.id || index}
                         className="border-b border-gray-100 hover:bg-gray-50"
                       >
                         <td className="py-3 px-4">
                           <input
                             type="checkbox"
-                            checked={selectedRecipients.has(recipient.email)}
-                            onChange={() => toggleSelectRecipient(recipient.email)}
+                            checked={selectedRecipients.has(recipient.id || recipient.email)}
+                            onChange={() => toggleSelectRecipient(recipient.id || recipient.email)}
                             className="rounded border-gray-300"
                           />
                         </td>
-                        <td className="py-3 px-4">
-                          <div className="font-medium text-gray-900">{recipient.full_name}</div>
+                        <td className="py-3 px-4 font-mono text-sm text-gray-600">
+                          {recipient.id || 'N/A'}
                         </td>
                         <td className="py-3 px-4">
-                          <div className="text-gray-600">{recipient.email}</div>
-                        </td>
-                        <td className="py-3 px-4">
-                          <div className="text-gray-600">{recipient.company || '-'}</div>
-                        </td>
-                        <td className="py-3 px-4">
-                          <div className="flex flex-col">
-                            <span className="text-sm text-gray-900">{recipient.category}</span>
-                            <span className="text-xs text-gray-500">{recipient.subcategory}</span>
+                          <div className="font-medium text-gray-900">
+                            {recipient.name || recipient.complete_name || 'N/A'}
                           </div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="text-gray-600">{recipient.email || 'No email'}</div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs">
+                            {recipient.x_activitec || 'General'}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="text-gray-600">{recipient.city || '-'}</div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <span className={`px-2 py-1 rounded text-xs ${recipient.active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                            {recipient.active ? 'Active' : 'Inactive'}
+                          </span>
                         </td>
                         <td className="py-3 px-4">
                           <div className="text-sm text-gray-600">
-                            {recipient.last_interaction || 'Never'}
+                            {recipient.write_date ? new Date(recipient.write_date).toLocaleDateString() : 'Never'}
                           </div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => showPreview(recipient)}
+                          >
+                            <Eye size={14} />
+                          </Button>
                         </td>
                       </tr>
                     ))}
@@ -450,6 +470,73 @@ const Import = () => {
           )}
         </Card>
       </div>
+
+      {/* Preview Modal */}
+      {previewRecipient && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden">
+            <div className="flex justify-between items-center px-6 py-4 border-b">
+              <h2 className="text-xl font-semibold">Recipient Preview</h2>
+              <button
+                onClick={() => setPreviewRecipient(null)}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto max-h-[70vh]">
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-500">ID</label>
+                    <p className="mt-1">{previewRecipient.id}</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-500">Active</label>
+                    <p className="mt-1">{previewRecipient.active ? 'Yes' : 'No'}</p>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-500">Name</label>
+                  <p className="mt-1">{previewRecipient.name || previewRecipient.complete_name}</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-500">Email</label>
+                  <p className="mt-1">{previewRecipient.email}</p>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-500">Category (x_activitec)</label>
+                    <p className="mt-1">{previewRecipient.x_activitec || 'General'}</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-500">City</label>
+                    <p className="mt-1">{previewRecipient.city || '-'}</p>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-500">Company</label>
+                  <p className="mt-1">{previewRecipient.is_company ? 'Company' : 'Individual'}</p>
+                </div>
+                {previewRecipient.write_date && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-500">Last Updated</label>
+                    <p className="mt-1">{new Date(previewRecipient.write_date).toLocaleString()}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t bg-gray-50 flex justify-end">
+              <Button
+                onClick={() => setPreviewRecipient(null)}
+                variant="outline"
+              >
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

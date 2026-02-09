@@ -102,10 +102,10 @@ DATABASES = {
     },
     'source_db': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('SOURCE_DB_NAME', 'source_db'),
-        'USER': os.getenv('SOURCE_DB_USER', 'readonly_user'),
-        'PASSWORD': os.getenv('SOURCE_DB_PASSWORD', 'readonly_pass'),
-        'HOST': os.getenv('SOURCE_DB_HOST', 'localhost'),
+        'NAME': os.getenv('SOURCE_DB_NAME', 'auto_mail_local'),
+        'USER': os.getenv('SOURCE_DB_USER', 'auto_mail_user'),
+        'PASSWORD': os.getenv('SOURCE_DB_PASSWORD', 'odoo'),
+        'HOST': os.getenv('SOURCE_DB_HOST', '192.168.1.39'),
         'PORT': os.getenv('SOURCE_DB_PORT', '5432'),
     }
 }

@@ -2,27 +2,31 @@ from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
 from datetime import datetime, timedelta
 
+
 class Recipient(models.Model):
     """Recipients imported from source database"""
-    email = models.EmailField(unique=True)
+    source_id = models.IntegerField(unique=True, null=True, blank=True, help_text="ID from source database")
+    email = models.EmailField()
     full_name = models.CharField(max_length=255)
-    category = models.CharField(max_length=100)
-    subcategory = models.CharField(max_length=100)
-    last_interaction = models.DateField(null=True, blank=True)
-    company = models.CharField(max_length=255, blank=True)
+    x_activitec = models.CharField(max_length=100, blank=True, help_text="Category from source database")
+    city = models.CharField(max_length=100, blank=True)
+    company = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
+    last_interaction = models.DateTimeField(null=True, blank=True)
     imported_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:
+        ordering = ['-imported_at']
         indexes = [
-            models.Index(fields=['category', 'subcategory']),
-            models.Index(fields=['last_interaction']),
+            models.Index(fields=['x_activitec']),
             models.Index(fields=['is_active']),
+            models.Index(fields=['email']),
         ]
     
     def __str__(self):
         return f"{self.full_name} <{self.email}>"
-
+    
+    
 class EmailTemplate(models.Model):
     """Templates for email generation"""
     TEMPLATE_TYPE_CHOICES = [

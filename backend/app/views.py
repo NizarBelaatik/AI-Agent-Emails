@@ -1,82 +1,136 @@
-# backend/app/views.py
-from rest_framework import viewsets, status, filters, permissions
+from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from django.db import connections, transaction
+from django.db import connections
 from django.utils import timezone
-from django.db.models import Q, Count, F
-from django_filters import rest_framework as django_filters
-from django.core.paginator import Paginator
+from django.db.models import Count, Q
 from datetime import datetime, timedelta
 import json
-import requests
 import boto3
 from botocore.exceptions import ClientError
 
-from .models import (
-    Recipient, GeneratedEmail, EmailTemplate, EmailLog, 
-    EmailCampaign, Setting
-)
+from .models import Recipient, GeneratedEmail, EmailTemplate, EmailLog
 from .serializers import (
-    RecipientSerializer, GeneratedEmailSerializer, EmailTemplateSerializer,
-    EmailLogSerializer, EmailCampaignSerializer, SettingSerializer,
-    BulkActionSerializer, ImportSelectionSerializer, EmailGenerationSerializer
+    RecipientSerializer, GeneratedEmailSerializer, 
+    EmailTemplateSerializer, EmailLogSerializer
 )
 
-class SourceRecipientViewSet(viewsets.ViewSet):
-    """ViewSet for source database operations"""
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+# ============ SOURCE DATABASE API ============
+
+class SourceDatabaseAPI(APIView):
+    """Read-only API for source database"""
     
-    @action(detail=False, methods=['get'])
-    def browse(self, request):
-        """Browse source recipients with filters and selection options"""
+    def get(self, request):
+        """Get source database information"""
         try:
-            # Get filters from query params
-            category = request.query_params.get('category')
-            subcategory = request.query_params.get('subcategory')
-            search = request.query_params.get('search', '')
-            min_date = request.query_params.get('min_date')
-            max_date = request.query_params.get('max_date')
+            with connections['source_db'].cursor() as cursor:
+                # Get table info
+                cursor.execute("""
+                    SELECT COUNT(*) as total_count,
+                           COUNT(CASE WHEN active = TRUE THEN 1 END) as active_count,
+                           COUNT(CASE WHEN email IS NOT NULL AND email != '' THEN 1 END) as with_email_count
+                    FROM res_partner
+                """)
+                stats = cursor.fetchone()
+                
+                # Get categories
+                cursor.execute("""
+                    SELECT DISTINCT x_activitec 
+                    FROM res_partner 
+                    WHERE x_activitec IS NOT NULL AND x_activitec != ''
+                    ORDER BY x_activitec
+                    LIMIT 50
+                """)
+                categories = [row[0] for row in cursor.fetchall()]
+                
+                return Response({
+                    'success': True,
+                    'stats': {
+                        'total': stats[0],
+                        'active': stats[1],
+                        'with_email': stats[2]
+                    },
+                    'categories': categories,
+                    'database': 'res_partner',
+                    'timestamp': timezone.now().isoformat()
+                })
+        except Exception as e:
+            return Response({
+                'success': False,
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class SourceRecipientsAPI(APIView):
+    """Browse recipients from source database"""
+    
+    # views.py - Update the GET method in SourceRecipientsAPI
+    def get(self, request):
+        """Get recipients with filtering and pagination - EXCLUDE ALREADY IMPORTED"""
+        try:
+            # Get query parameters
             page = int(request.query_params.get('page', 1))
             page_size = int(request.query_params.get('page_size', 50))
+            offset = (page - 1) * page_size
             
-            # Build query
+            search = request.query_params.get('search', '')
+            x_activitec = request.query_params.get('x_activitec', '')
+            active_only = request.query_params.get('active_only', 'true') == 'true'
+            has_email = request.query_params.get('has_email', 'true') == 'true'
+            
+            # Get already imported recipient IDs from source database
+            imported_source_ids = Recipient.objects.filter(
+                source_id__isnull=False
+            ).values_list('source_id', flat=True)
+            
+            # Build query - EXCLUDE already imported
             query = """
-                SELECT email, full_name, category, subcategory, 
-                       last_interaction, company, is_active,
-                       COUNT(*) OVER() as total_count
-                FROM recipients
-                WHERE is_active = TRUE
+                SELECT 
+                    id,
+                    COALESCE(name, complete_name) as name,
+                    email,
+                    x_activitec,
+                    city,
+                    is_company,
+                    active,
+                    create_date,
+                    write_date
+                FROM res_partner
+                WHERE 1=1
             """
             
             params = []
             
-            if category:
-                query += " AND category = %s"
-                params.append(category)
+            if active_only:
+                query += " AND active = TRUE"
             
-            if subcategory:
-                query += " AND subcategory = %s"
-                params.append(subcategory)
+            if has_email:
+                query += " AND email IS NOT NULL AND email != ''"
+            
+            if x_activitec:
+                query += " AND x_activitec = %s"
+                params.append(x_activitec)
             
             if search:
-                query += " AND (email ILIKE %s OR full_name ILIKE %s OR company ILIKE %s)"
-                params.append(f'%{search}%')
-                params.append(f'%{search}%')
-                params.append(f'%{search}%')
+                search_term = f'%{search}%'
+                query += " AND (email ILIKE %s OR name ILIKE %s OR complete_name ILIKE %s)"
+                params.extend([search_term, search_term, search_term])
             
-            if min_date:
-                query += " AND last_interaction >= %s"
-                params.append(min_date)
+            # EXCLUDE already imported recipients
+            if imported_source_ids:
+                placeholders = ','.join(['%s'] * len(imported_source_ids))
+                query += f" AND id NOT IN ({placeholders})"
+                params.extend(imported_source_ids)
             
-            if max_date:
-                query += " AND last_interaction <= %s"
-                params.append(max_date)
+            # Get total count
+            count_query = f"SELECT COUNT(*) FROM ({query}) as subquery"
+            with connections['source_db'].cursor() as cursor:
+                cursor.execute(count_query, params)
+                total_count = cursor.fetchone()[0]
             
-            # Add pagination
-            offset = (page - 1) * page_size
-            query += f" ORDER BY last_interaction DESC LIMIT {page_size} OFFSET {offset}"
+            # Get paginated results
+            query += " ORDER BY write_date DESC LIMIT %s OFFSET %s"
+            params.extend([page_size, offset])
             
             with connections['source_db'].cursor() as cursor:
                 cursor.execute(query, params)
@@ -86,1122 +140,933 @@ class SourceRecipientViewSet(viewsets.ViewSet):
                     for row in cursor.fetchall()
                 ]
             
-            # Get total count from first row
-            total_count = rows[0]['total_count'] if rows else 0
-            
-            # Get available categories for filters
-            with connections['source_db'].cursor() as cursor:
-                cursor.execute("""
-                    SELECT DISTINCT category, subcategory 
-                    FROM recipients 
-                    WHERE is_active = TRUE 
-                    ORDER BY category, subcategory
-                """)
-                categories = [
-                    {'category': row[0], 'subcategory': row[1]}
-                    for row in cursor.fetchall()
-                ]
+            # Convert dates to strings
+            for row in rows:
+                if row.get('create_date'):
+                    row['create_date'] = row['create_date'].isoformat()
+                if row.get('write_date'):
+                    row['write_date'] = row['write_date'].isoformat()
             
             return Response({
-                'recipients': rows,
+                'success': True,
+                'data': rows,
                 'pagination': {
                     'page': page,
                     'page_size': page_size,
-                    'total_count': total_count,
-                    'total_pages': (total_count + page_size - 1) // page_size
+                    'total': total_count,
+                    'pages': (total_count + page_size - 1) // page_size
                 },
                 'filters': {
-                    'categories': categories,
-                    'date_range': {
-                        'min': min_date,
-                        'max': max_date
-                    }
+                    'search': search,
+                    'x_activitec': x_activitec,
+                    'active_only': active_only,
+                    'has_email': has_email
+                },
+                'stats': {
+                    'excluded_already_imported': len(imported_source_ids)
                 }
             })
             
         except Exception as e:
-            return Response(
-                {'error': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-    
-    @action(detail=False, methods=['post'])
-    def import_recipients(self, request):
-        """Import recipients based on selection type"""
-        serializer = ImportSelectionSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            print(f"GET error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return Response({
+                'success': False,
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
         
-        data = serializer.validated_data
-        selection_type = data['selection_type']
-        filters = data.get('filters', {})
-        selected_emails = data.get('selected_emails', [])
-        limit = data.get('limit', 100)
-        
+    def post(self, request):
+        """Import recipients from source to local database - WITH DEBUGGING"""
         try:
-            # Build query based on selection type
+            print("=== IMPORT REQUEST RECEIVED ===")
+            print("Request data:", request.data)
+            print("Request user:", request.user)
+            
+            recipient_ids = request.data.get('ids', [])
+            x_activitec = request.data.get('x_activitec', '')
+            limit = int(request.data.get('limit', 100))
+            
+            print(f"IDs: {recipient_ids}, x_activitec: {x_activitec}, limit: {limit}")
+            
+            if not recipient_ids and not x_activitec:
+                print("No IDs or x_activitec provided")
+                return Response({
+                    'success': False,
+                    'error': 'Provide either ids or x_activitec'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Build source query
             query = """
-                SELECT email, full_name, category, subcategory, 
-                       last_interaction, company
-                FROM recipients
-                WHERE is_active = TRUE
+                SELECT 
+                    id,
+                    COALESCE(name, complete_name) as name,
+                    email,
+                    x_activitec,
+                    city,
+                    is_company,
+                    active,
+                    write_date
+                FROM res_partner
+                WHERE active = TRUE
+                AND email IS NOT NULL
+                AND email != ''
             """
             
             params = []
             
-            if selection_type == 'selected':
-                if not selected_emails:
-                    return Response(
-                        {'error': 'No emails selected'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-                placeholders = ', '.join(['%s'] * len(selected_emails))
-                query += f" AND email IN ({placeholders})"
-                params.extend(selected_emails)
+            if recipient_ids:
+                print(f"Looking for IDs: {recipient_ids}")
+                placeholders = ','.join(['%s'] * len(recipient_ids))
+                query += f" AND id IN ({placeholders})"
+                params.extend(recipient_ids)
+            elif x_activitec:
+                print(f"Looking for x_activitec: {x_activitec}")
+                query += " AND x_activitec = %s"
+                params.append(x_activitec)
             
-            elif selection_type == 'filtered':
-                # Apply filters
-                if filters.get('category'):
-                    query += " AND category = %s"
-                    params.append(filters['category'])
-                
-                if filters.get('subcategory'):
-                    query += " AND subcategory = %s"
-                    params.append(filters['subcategory'])
-                
-                if filters.get('search'):
-                    query += " AND (email ILIKE %s OR full_name ILIKE %s)"
-                    params.append(f"%{filters['search']}%")
-                    params.append(f"%{filters['search']}%")
+            query += " LIMIT %s"
+            params.append(limit)
             
-            # Limit results
-            query += f" LIMIT {limit}"
+            print(f"SQL Query: {query}")
+            print(f"SQL Params: {params}")
             
             with connections['source_db'].cursor() as cursor:
                 cursor.execute(query, params)
-                rows = cursor.fetchall()
-                
-                imported = []
-                errors = []
-                
-                for row in rows:
-                    try:
-                        recipient, created = Recipient.objects.update_or_create(
-                            email=row[0],
-                            defaults={
-                                'full_name': row[1],
-                                'category': row[2],
-                                'subcategory': row[3],
-                                'last_interaction': row[4],
-                                'company': row[5],
-                                'is_active': True,
-                            }
+                columns = [col[0] for col in cursor.description]
+                source_recipients = [
+                    dict(zip(columns, row))
+                    for row in cursor.fetchall()
+                ]
+            
+            print(f"Found {len(source_recipients)} recipients in source database")
+            
+            imported = []
+            errors = []
+            
+            for src_recipient in source_recipients:
+                try:
+                    print(f"Processing recipient: {src_recipient.get('email')} (ID: {src_recipient.get('id')})")
+                    
+                    # Check if already exists
+                    existing = Recipient.objects.filter(
+                        Q(source_id=src_recipient['id']) | Q(email=src_recipient['email'])
+                    ).first()
+                    
+                    if existing:
+                        # Update existing
+                        existing.full_name = src_recipient['name'] or 'Unknown'
+                        existing.x_activitec = src_recipient.get('x_activitec', '')
+                        existing.city = src_recipient.get('city', '')
+                        existing.company = src_recipient.get('is_company', False)
+                        existing.is_active = src_recipient.get('active', True)
+                        if src_recipient.get('write_date'):
+                            existing.last_interaction = src_recipient['write_date']
+                        existing.save()
+                        action = 'updated'
+                        print(f"Updated: {existing.email}")
+                    else:
+                        # Create new
+                        existing = Recipient.objects.create(
+                            source_id=src_recipient['id'],
+                            email=src_recipient['email'],
+                            full_name=src_recipient['name'] or 'Unknown',
+                            x_activitec=src_recipient.get('x_activitec', ''),
+                            city=src_recipient.get('city', ''),
+                            company=src_recipient.get('is_company', False),
+                            is_active=src_recipient.get('active', True),
+                            last_interaction=src_recipient.get('write_date')
                         )
-                        imported.append({
-                            'email': recipient.email,
-                            'name': recipient.full_name,
-                            'action': 'created' if created else 'updated'
-                        })
-                    except Exception as e:
-                        errors.append({
-                            'email': row[0],
-                            'error': str(e)
-                        })
+                        action = 'created'
+                        print(f"Created: {existing.email}")
+                    
+                    imported.append({
+                        'id': existing.id,
+                        'email': existing.email,
+                        'name': existing.full_name,
+                        'action': action
+                    })
+                    
+                except Exception as e:
+                    print(f"Error processing {src_recipient.get('email')}: {str(e)}")
+                    errors.append({
+                        'email': src_recipient.get('email', 'unknown'),
+                        'error': str(e)
+                    })
             
             # Log the import
             EmailLog.objects.create(
                 action='imported',
-                performed_by=request.user.username if request.user.is_authenticated else 'system',
-                details=f"Imported {len(imported)} recipients",
+                performed_by='system',
+                details=f"Imported {len(imported)} recipients from source database",
                 metadata={
-                    'selection_type': selection_type,
-                    'filters': filters,
-                    'total_imported': len(imported)
+                    'source_ids': recipient_ids,
+                    'x_activitec': x_activitec,
+                    'imported': len(imported),
+                    'errors': len(errors)
                 }
             )
             
+            print(f"Import completed: {len(imported)} imported, {len(errors)} errors")
+            
             return Response({
+                'success': True,
                 'imported': imported,
                 'errors': errors,
                 'total_imported': len(imported),
-                'total_errors': len(errors),
-                'selection_type': selection_type
+                'total_errors': len(errors)
             })
             
         except Exception as e:
-            return Response(
-                {'error': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            print(f"Import error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return Response({
+                'success': False,
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+            
+# ============ LOCAL RECIPIENTS API ============
+
+class RecipientViewSet(viewsets.ModelViewSet):
+    """API for local recipients"""
+    queryset = Recipient.objects.all().order_by('-imported_at')
+    serializer_class = RecipientSerializer
+    
+    def list(self, request):
+        """Get recipients with optional filtering"""
+        queryset = self.get_queryset()
+        
+        # Apply filters
+        search = request.query_params.get('search', '')
+        x_activitec = request.query_params.get('x_activitec', '')
+        city = request.query_params.get('city', '')
+        is_active = request.query_params.get('is_active', '')
+        has_emails = request.query_params.get('has_emails', '')
+        
+        if search:
+            queryset = queryset.filter(
+                Q(full_name__icontains=search) |
+                Q(email__icontains=search) |
+                Q(city__icontains=search)
             )
+        
+        if x_activitec:
+            queryset = queryset.filter(x_activitec=x_activitec)
+        
+        if city:
+            queryset = queryset.filter(city=city)
+        
+        if is_active:
+            queryset = queryset.filter(is_active=is_active.lower() == 'true')
+        
+        if has_emails == 'with':
+            queryset = queryset.filter(emails__isnull=False).distinct()
+        elif has_emails == 'without':
+            queryset = queryset.filter(emails__isnull=True)
+        
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            'success': True,
+            'data': serializer.data,
+            'count': queryset.count()
+        })
     
     @action(detail=False, methods=['get'])
     def stats(self, request):
-        """Get source database statistics"""
-        try:
-            with connections['source_db'].cursor() as cursor:
-                # Total recipients
-                cursor.execute("SELECT COUNT(*) FROM recipients WHERE is_active = TRUE")
-                total = cursor.fetchone()[0]
-                
-                # By category
-                cursor.execute("""
-                    SELECT category, COUNT(*) as count
-                    FROM recipients 
-                    WHERE is_active = TRUE 
-                    GROUP BY category 
-                    ORDER BY count DESC
-                """)
-                by_category = [
-                    {'category': row[0], 'count': row[1]}
-                    for row in cursor.fetchall()
-                ]
-                
-                # Recent activity
-                cursor.execute("""
-                    SELECT COUNT(*) as recent_count
-                    FROM recipients 
-                    WHERE is_active = TRUE 
-                    AND last_interaction >= CURRENT_DATE - INTERVAL '30 days'
-                """)
-                recent = cursor.fetchone()[0]
-                
-                # Companies
-                cursor.execute("""
-                    SELECT company, COUNT(*) as count
-                    FROM recipients 
-                    WHERE is_active = TRUE AND company != ''
-                    GROUP BY company 
-                    ORDER BY count DESC 
-                    LIMIT 10
-                """)
-                companies = [
-                    {'company': row[0], 'count': row[1]}
-                    for row in cursor.fetchall()
-                ]
-            
-            return Response({
-                'total_recipients': total,
-                'by_category': by_category,
-                'recent_activity': recent,
-                'top_companies': companies
-            })
-            
-        except Exception as e:
-            return Response(
-                {'error': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-class RecipientViewSet(viewsets.ModelViewSet):
-    """ViewSet for imported recipients"""
-    queryset = Recipient.objects.filter(is_active=True).order_by('-imported_at')
-    serializer_class = RecipientSerializer
-    filter_backends = [django_filters.DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['category', 'subcategory', 'is_active']
-    search_fields = ['email', 'full_name', 'company']
-    ordering_fields = ['imported_at', 'last_interaction', 'full_name']
-    
-    @action(detail=False, methods=['get'])
-    def dashboard(self, request):
-        """Get dashboard statistics"""
-        total = self.get_queryset().count()
+        """Get recipient statistics"""
+        total = Recipient.objects.count()
+        active = Recipient.objects.filter(is_active=True).count()
         
-        by_category = Recipient.objects.filter(is_active=True).values(
-            'category', 'subcategory'
-        ).annotate(
+        categories = Recipient.objects.filter(
+            x_activitec__isnull=False
+        ).values('x_activitec').annotate(
             count=Count('id')
-        ).order_by('category', 'subcategory')
+        ).order_by('-count')[:10]
+        
+        with_emails = Recipient.objects.filter(
+            emails__isnull=False
+        ).distinct().count()
         
         recent = Recipient.objects.filter(
-            is_active=True,
             imported_at__gte=timezone.now() - timedelta(days=7)
         ).count()
         
         return Response({
+            'success': True,
             'total': total,
-            'by_category': list(by_category),
-            'recent_imports': recent
+            'active': active,
+            'with_emails': with_emails,
+            'recent_imports': recent,
+            'categories': list(categories)
         })
     
-    @action(detail=False, methods=['delete'])
+    @action(detail=False, methods=['post'])
     def bulk_delete(self, request):
         """Bulk delete recipients"""
         recipient_ids = request.data.get('ids', [])
         
         if not recipient_ids:
-            return Response(
-                {'error': 'No recipient IDs provided'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({
+                'success': False,
+                'error': 'No recipient IDs provided'
+            }, status=status.HTTP_400_BAD_REQUEST)
         
         deleted_count, _ = Recipient.objects.filter(id__in=recipient_ids).delete()
         
+        # Log the action
         EmailLog.objects.create(
-            action='bulk_action',
-            performed_by=request.user.username if request.user.is_authenticated else 'system',
-            details=f'Bulk deleted {deleted_count} recipients',
-            metadata={'action': 'delete', 'count': deleted_count}
+            action='bulk_delete',
+            performed_by='system',
+            details=f"Deleted {deleted_count} recipients",
+            metadata={'recipient_ids': recipient_ids}
         )
-        
-        return Response({'deleted_count': deleted_count})
-
-class GeneratedEmailViewSet(viewsets.ModelViewSet):
-    """ViewSet for generated emails with all features"""
-    queryset = GeneratedEmail.objects.all().order_by('-generated_at')
-    serializer_class = GeneratedEmailSerializer
-    filter_backends = [django_filters.DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['status', 'recipient__category', 'recipient__subcategory', 'priority']
-    search_fields = [
-        'recipient__email', 'recipient__full_name', 'subject',
-        'body_text', 'ses_message_id'
-    ]
-    ordering_fields = [
-        'generated_at', 'scheduled_for', 'sent_at', 
-        'priority', 'recipient__full_name'
-    ]
-    
-    def get_queryset(self):
-        """Filter queryset based on request parameters"""
-        queryset = super().get_queryset()
-        
-        # Filter by campaign
-        campaign_id = self.request.query_params.get('campaign_id')
-        if campaign_id:
-            # Implementation depends on how campaigns are linked to emails
-            pass
-        
-        # Filter by date range
-        start_date = self.request.query_params.get('start_date')
-        end_date = self.request.query_params.get('end_date')
-        if start_date:
-            queryset = queryset.filter(generated_at__gte=start_date)
-        if end_date:
-            queryset = queryset.filter(generated_at__lte=end_date)
-        
-        # Filter by tags
-        tags = self.request.query_params.get('tags')
-        if tags:
-            tag_list = tags.split(',')
-            queryset = queryset.filter(tags__overlap=tag_list)
-        
-        return queryset
-    
-    def get_llm_service(self):
-        """Get LLM service instance"""
-        class LLMService:
-            def __init__(self):
-                self.api_url = "http://ollama:11434"
-                self.model = "llama2"
-            
-            def generate_email(self, recipient, template):
-                """Generate email using LLM"""
-                prompt = template.prompt_template.format(
-                    name=recipient.full_name,
-                    company=recipient.company,
-                    category=recipient.category,
-                    subcategory=recipient.subcategory,
-                    last_interaction=recipient.last_interaction.strftime('%d/%m/%Y') if recipient.last_interaction else 'N/A'
-                )
-                
-                try:
-                    response = requests.post(
-                        f"{self.api_url}/api/generate",
-                        json={
-                            "model": self.model,
-                            "prompt": prompt,
-                            "stream": False,
-                            "options": {
-                                "temperature": 0.7,
-                                "max_tokens": 1000
-                            }
-                        },
-                        timeout=30
-                    )
-                    
-                    if response.status_code == 200:
-                        result = response.json()
-                        content = result['response']
-                        
-                        # Parse response
-                        lines = content.strip().split('\n')
-                        subject = ''
-                        body = []
-                        
-                        for line in lines:
-                            if line.startswith('Subject:'):
-                                subject = line.replace('Subject:', '').strip()
-                            elif line.startswith('Body:'):
-                                body.append(line.replace('Body:', '').strip())
-                            else:
-                                body.append(line.strip())
-                        
-                        body_html = '<br>'.join(body)
-                        body_text = '\n'.join(body)
-                        
-                        return {
-                            'subject': subject,
-                            'body_html': body_html,
-                            'body_text': body_text,
-                            'success': True
-                        }
-                    
-                    return {
-                        'success': False,
-                        'error': f'LLM API error: {response.status_code}'
-                    }
-                    
-                except Exception as e:
-                    return {
-                        'success': False,
-                        'error': str(e)
-                    }
-        
-        return LLMService()
-    
-    def get_email_service(self):
-        """Get email service instance"""
-        class EmailService:
-            def __init__(self):
-                # These should be from settings
-                self.ses_client = boto3.client(
-                    'ses',
-                    region_name='us-east-1',
-                    aws_access_key_id='your-key',
-                    aws_secret_access_key='your-secret'
-                )
-                self.sender = 'no-reply@yourcompany.com'
-            
-            def send_email(self, recipient_email, subject, body_html, body_text):
-                """Send email via SES"""
-                try:
-                    response = self.ses_client.send_email(
-                        Source=self.sender,
-                        Destination={'ToAddresses': [recipient_email]},
-                        Message={
-                            'Subject': {'Data': subject},
-                            'Body': {
-                                'Text': {'Data': body_text},
-                                'Html': {'Data': body_html}
-                            }
-                        }
-                    )
-                    return {'success': True, 'message_id': response['MessageId']}
-                except ClientError as e:
-                    return {'success': False, 'error': e.response['Error']['Message']}
-        
-        return EmailService()
-    
-    @action(detail=False, methods=['get'])
-    def dashboard(self, request):
-        """Get email dashboard statistics"""
-        total = GeneratedEmail.objects.count()
-        
-        stats = GeneratedEmail.objects.aggregate(
-            draft=Count('id', filter=Q(status='draft')),
-            approved=Count('id', filter=Q(status='approved')),
-            scheduled=Count('id', filter=Q(status='scheduled')),
-            sent=Count('id', filter=Q(status='sent')),
-            failed=Count('id', filter=Q(status='failed')),
-            today=Count('id', filter=Q(generated_at__date=timezone.now().date()))
-        )
-        
-        by_category = GeneratedEmail.objects.values(
-            'recipient__category'
-        ).annotate(
-            count=Count('id')
-        ).order_by('-count')[:10]
-        
-        recent_activity = EmailLog.objects.filter(
-            performed_at__gte=timezone.now() - timedelta(hours=24)
-        ).values('action').annotate(
-            count=Count('id')
-        ).order_by('-count')
         
         return Response({
-            'total_emails': total,
-            'status_stats': stats,
-            'by_category': list(by_category),
-            'recent_activity': list(recent_activity)
+            'success': True,
+            'deleted_count': deleted_count
         })
     
     @action(detail=False, methods=['post'])
-    def generate_batch(self, request):
-        """Generate emails in batch with selection options"""
-        serializer = EmailGenerationSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        
-        data = serializer.validated_data
-        selection_type = data['selection_type']
-        filters = data.get('filters', {})
-        selected_ids = data.get('selected_ids', [])
-        template_id = data['template_id']
-        batch_name = data.get('batch_name', 'Batch Generation')
-        
+    def sync(self, request):
+        """Sync with source database"""
         try:
-            template = EmailTemplate.objects.get(id=template_id, is_active=True)
-            llm_service = self.get_llm_service()
+            # Get all active recipients with email from source
+            query = """
+                SELECT id, email, COALESCE(name, complete_name) as name, 
+                       x_activitec, city, is_company, active, write_date
+                FROM res_partner
+                WHERE active = TRUE
+                AND email IS NOT NULL
+                AND email != ''
+            """
             
-            # Get recipients based on selection type
-            if selection_type == 'selected':
-                recipients = Recipient.objects.filter(id__in=selected_ids, is_active=True)
-            elif selection_type == 'filtered':
-                queryset = Recipient.objects.filter(is_active=True)
-                if filters.get('category'):
-                    queryset = queryset.filter(category=filters['category'])
-                if filters.get('subcategory'):
-                    queryset = queryset.filter(subcategory=filters['subcategory'])
-                recipients = queryset
-            else:  # 'all'
-                recipients = Recipient.objects.filter(is_active=True)
+            with connections['source_db'].cursor() as cursor:
+                cursor.execute(query)
+                columns = [col[0] for col in cursor.description]
+                source_recipients = [
+                    dict(zip(columns, row))
+                    for row in cursor.fetchall()
+                ]
             
-            results = []
-            generated_emails = []
+            updated = 0
+            created = 0
+            
+            for src_recipient in source_recipients:
+                existing = Recipient.objects.filter(
+                    Q(source_id=src_recipient['id']) | Q(email=src_recipient['email'])
+                ).first()
+                
+                if existing:
+                    # Update existing
+                    existing.full_name = src_recipient['name'] or 'Unknown'
+                    existing.x_activitec = src_recipient.get('x_activitec', '')
+                    existing.city = src_recipient.get('city', '')
+                    existing.company = src_recipient.get('is_company', False)
+                    existing.is_active = src_recipient.get('active', True)
+                    if src_recipient.get('write_date'):
+                        existing.last_interaction = src_recipient['write_date']
+                    existing.save()
+                    updated += 1
+                else:
+                    # Create new
+                    Recipient.objects.create(
+                        source_id=src_recipient['id'],
+                        email=src_recipient['email'],
+                        full_name=src_recipient['name'] or 'Unknown',
+                        x_activitec=src_recipient.get('x_activitec', ''),
+                        city=src_recipient.get('city', ''),
+                        company=src_recipient.get('is_company', False),
+                        is_active=src_recipient.get('active', True),
+                        last_interaction=src_recipient.get('write_date')
+                    )
+                    created += 1
+            
+            # Deactivate recipients not in source
+            source_emails = [r['email'] for r in source_recipients]
+            deactivated = Recipient.objects.filter(
+                is_active=True
+            ).exclude(
+                email__in=source_emails
+            ).update(is_active=False)
+            
+            # Log the sync
+            EmailLog.objects.create(
+                action='sync',
+                performed_by='system',
+                details=f"Synced with source: Created {created}, Updated {updated}, Deactivated {deactivated}",
+                metadata={
+                    'created': created,
+                    'updated': updated,
+                    'deactivated': deactivated
+                }
+            )
+            
+            return Response({
+                'success': True,
+                'created': created,
+                'updated': updated,
+                'deactivated': deactivated,
+                'total_in_source': len(source_recipients)
+            })
+            
+        except Exception as e:
+            return Response({
+                'success': False,
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+# ============ EMAILS API ============
+
+class GeneratedEmailViewSet(viewsets.ModelViewSet):
+    """API for generated emails"""
+    queryset = GeneratedEmail.objects.all().order_by('-generated_at')
+    serializer_class = GeneratedEmailSerializer
+    
+    def list(self, request):
+        """Get emails with filtering"""
+        queryset = self.get_queryset()
+        
+        # Apply filters
+        status_filter = request.query_params.get('status', '')
+        category = request.query_params.get('category', '')
+        search = request.query_params.get('search', '')
+        
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        
+        if category:
+            queryset = queryset.filter(recipient__x_activitec=category)
+        
+        if search:
+            queryset = queryset.filter(
+                Q(subject__icontains=search) |
+                Q(recipient__email__icontains=search) |
+                Q(recipient__full_name__icontains=search)
+            )
+        
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            'success': True,
+            'data': serializer.data,
+            'count': queryset.count()
+        })
+    
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        """Get email statistics"""
+        total = GeneratedEmail.objects.count()
+        
+        status_stats = GeneratedEmail.objects.values('status').annotate(
+            count=Count('id')
+        ).order_by('status')
+        
+        today = timezone.now().date()
+        today_count = GeneratedEmail.objects.filter(
+            generated_at__date=today
+        ).count()
+        
+        by_category = GeneratedEmail.objects.filter(
+            recipient__x_activitec__isnull=False
+        ).values('recipient__x_activitec').annotate(
+            count=Count('id')
+        ).order_by('-count')[:10]
+        
+        return Response({
+            'success': True,
+            'total': total,
+            'today': today_count,
+            'by_status': list(status_stats),
+            'by_category': list(by_category)
+        })
+    
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        """Approve an email"""
+        email = self.get_object()
+        
+        if email.status != 'draft':
+            return Response({
+                'success': False,
+                'error': 'Only draft emails can be approved'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        email.status = 'approved'
+        email.approved_at = timezone.now()
+        email.save()
+        
+        # Log the approval
+        EmailLog.objects.create(
+            email=email,
+            action='approved',
+            performed_by='system',
+            details=f"Email approved for {email.recipient.email}"
+        )
+        
+        return Response({
+            'success': True,
+            'message': 'Email approved successfully',
+            'email_id': email.id
+        })
+    
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        """Reject an email"""
+        email = self.get_object()
+        reason = request.data.get('reason', 'No reason provided')
+        
+        email.status = 'rejected'
+        email.save()
+        
+        # Log the rejection
+        EmailLog.objects.create(
+            email=email,
+            action='rejected',
+            performed_by='system',
+            details=f"Email rejected: {reason}"
+        )
+        
+        return Response({
+            'success': True,
+            'message': 'Email rejected',
+            'email_id': email.id
+        })
+    
+    @action(detail=False, methods=['post'])
+    def generate(self, request):
+        """Generate emails for recipients"""
+        try:
+            recipient_ids = request.data.get('recipient_ids', [])
+            template_id = request.data.get('template_id', 1)
+            category = request.data.get('category', '')
+            limit = int(request.data.get('limit', 10))
+            
+            if not recipient_ids and not category:
+                return Response({
+                    'success': False,
+                    'error': 'Provide either recipient_ids or category'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Get recipients
+            if recipient_ids:
+                recipients = Recipient.objects.filter(
+                    id__in=recipient_ids,
+                    is_active=True,
+                    email__isnull=False
+                ).exclude(email='')
+            elif category:
+                recipients = Recipient.objects.filter(
+                    x_activitec=category,
+                    is_active=True,
+                    email__isnull=False
+                ).exclude(email='').order_by('?')[:limit]
+            
+            # Get template
+            template = EmailTemplate.objects.filter(id=template_id).first()
+            if not template:
+                template = EmailTemplate.objects.first()
+            
+            generated = []
+            errors = []
             
             for recipient in recipients:
                 try:
-                    # Check for existing emails
+                    # Check for existing draft/approved emails
                     existing = GeneratedEmail.objects.filter(
                         recipient=recipient,
-                        status__in=['draft', 'approved', 'scheduled']
+                        status__in=['draft', 'approved']
                     ).first()
                     
                     if existing:
-                        results.append({
-                            'recipient': recipient.email,
-                            'success': False,
-                            'error': f'Active email exists (ID: {existing.id})',
-                            'email_id': existing.id
+                        errors.append({
+                            'email': recipient.email,
+                            'error': f'Active email exists (ID: {existing.id})'
                         })
                         continue
                     
-                    # Generate email
-                    result = llm_service.generate_email(recipient, template)
+                    # Generate email content (simple version)
+                    subject = f"Bonjour {recipient.full_name}"
+                    body_html = f"""
+                        <html>
+                        <body>
+                            <h1>Bonjour {recipient.full_name},</h1>
+                            <p>Nous espérons que vous allez bien à {recipient.city or 'votre ville'}.</p>
+                            <p>En tant que client dans le secteur de {recipient.x_activitec or 'notre domaine'}, 
+                            nous avons des informations importantes à partager avec vous.</p>
+                            <p>Votre dernière interaction avec nous date du {recipient.last_interaction.strftime('%d/%m/%Y') if recipient.last_interaction else 'récemment'}.</p>
+                            <p>N'hésitez pas à nous contacter pour plus d'informations.</p>
+                            <p>Cordialement,<br>L'équipe</p>
+                        </body>
+                        </html>
+                    """
                     
-                    if result['success']:
-                        email = GeneratedEmail(
-                            recipient=recipient,
-                            subject=result['subject'],
-                            body_html=result['body_html'],
-                            body_text=result['body_text'],
-                            status='draft',
-                            tags=['batch', batch_name] if batch_name else ['batch']
-                        )
-                        generated_emails.append(email)
-                        results.append({
-                            'recipient': recipient.email,
-                            'success': True,
-                            'email_id': email.id,
-                            'subject': result['subject'][:50] + '...'
-                        })
-                    else:
-                        results.append({
-                            'recipient': recipient.email,
-                            'success': False,
-                            'error': result['error']
-                        })
+                    body_text = f"""
+                        Bonjour {recipient.full_name},
                         
+                        Nous espérons que vous allez bien à {recipient.city or 'votre ville'}.
+                        En tant que client dans le secteur de {recipient.x_activitec or 'notre domaine'}, 
+                        nous avons des informations importantes à partager avec vous.
+                        
+                        Votre dernière interaction avec nous date du {recipient.last_interaction.strftime('%d/%m/%Y') if recipient.last_interaction else 'récemment'}.
+                        
+                        N'hésitez pas à nous contacter pour plus d'informations.
+                        
+                        Cordialement,
+                        L'équipe
+                    """
+                    
+                    # Create email
+                    email = GeneratedEmail.objects.create(
+                        recipient=recipient,
+                        subject=subject,
+                        body_html=body_html,
+                        body_text=body_text,
+                        status='draft'
+                    )
+                    
+                    # Log generation
+                    EmailLog.objects.create(
+                        email=email,
+                        action='generated',
+                        performed_by='system',
+                        details=f'Generated from template: {template.name if template else "Default"}',
+                        metadata={
+                            'template_id': template_id,
+                            'category': category
+                        }
+                    )
+                    
+                    generated.append({
+                        'email_id': email.id,
+                        'recipient': recipient.email,
+                        'subject': subject[:50]
+                    })
+                    
                 except Exception as e:
+                    errors.append({
+                        'email': recipient.email,
+                        'error': str(e)
+                    })
+            
+            return Response({
+                'success': True,
+                'generated': generated,
+                'errors': errors,
+                'total': len(generated) + len(errors),
+                'success_count': len(generated),
+                'error_count': len(errors)
+            })
+            
+        except Exception as e:
+            return Response({
+                'success': False,
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    @action(detail=False, methods=['post'])
+    def send_approved(self, request):
+        """Send all approved emails"""
+        try:
+            approved_emails = GeneratedEmail.objects.filter(status='approved')
+            sent_count = 0
+            failed_count = 0
+            results = []
+            
+            # Get AWS SES configuration
+            aws_access_key = getattr(settings, 'AWS_ACCESS_KEY_ID', '')
+            aws_secret_key = getattr(settings, 'AWS_SECRET_ACCESS_KEY', '')
+            aws_region = getattr(settings, 'AWS_REGION', 'us-east-1')
+            sender_email = getattr(settings, 'SES_SENDER_EMAIL', '')
+            
+            # Check if we have AWS credentials
+            if not all([aws_access_key, aws_secret_key, sender_email]):
+                # Mock sending for testing
+                for email in approved_emails:
+                    email.status = 'sent'
+                    email.sent_at = timezone.now()
+                    email.ses_message_id = f'mock-{email.id}-{datetime.now().timestamp()}'
+                    email.save()
+                    
+                    EmailLog.objects.create(
+                        email=email,
+                        action='sent',
+                        performed_by='system',
+                        details='Mock sent (AWS not configured)',
+                        metadata={'mock': True}
+                    )
+                    
+                    sent_count += 1
                     results.append({
-                        'recipient': recipient.email if recipient else 'unknown',
+                        'email_id': email.id,
+                        'success': True,
+                        'message_id': email.ses_message_id
+                    })
+                
+                return Response({
+                    'success': True,
+                    'sent': sent_count,
+                    'failed': failed_count,
+                    'results': results,
+                    'note': 'Mock sending - AWS not configured'
+                })
+            
+            # Real sending with SES
+            ses_client = boto3.client(
+                'ses',
+                region_name=aws_region,
+                aws_access_key_id=aws_access_key,
+                aws_secret_access_key=aws_secret_key
+            )
+            
+            for email in approved_emails:
+                try:
+                    response = ses_client.send_email(
+                        Source=sender_email,
+                        Destination={'ToAddresses': [email.recipient.email]},
+                        Message={
+                            'Subject': {'Data': email.subject},
+                            'Body': {
+                                'Text': {'Data': email.body_text},
+                                'Html': {'Data': email.body_html}
+                            }
+                        }
+                    )
+                    
+                    email.status = 'sent'
+                    email.sent_at = timezone.now()
+                    email.ses_message_id = response['MessageId']
+                    email.save()
+                    
+                    EmailLog.objects.create(
+                        email=email,
+                        action='sent',
+                        performed_by='system',
+                        details=f'Sent via SES: {response["MessageId"]}',
+                        metadata={'message_id': response['MessageId']}
+                    )
+                    
+                    sent_count += 1
+                    results.append({
+                        'email_id': email.id,
+                        'success': True,
+                        'message_id': response['MessageId']
+                    })
+                    
+                except ClientError as e:
+                    email.status = 'failed'
+                    email.error_message = e.response['Error']['Message']
+                    email.save()
+                    
+                    EmailLog.objects.create(
+                        email=email,
+                        action='send_failed',
+                        performed_by='system',
+                        details=f'Failed to send: {e.response["Error"]["Message"]}'
+                    )
+                    
+                    failed_count += 1
+                    results.append({
+                        'email_id': email.id,
+                        'success': False,
+                        'error': e.response['Error']['Message']
+                    })
+                
+                except Exception as e:
+                    failed_count += 1
+                    results.append({
+                        'email_id': email.id,
                         'success': False,
                         'error': str(e)
                     })
             
-            # Bulk create successful emails
-            if generated_emails:
-                GeneratedEmail.objects.bulk_create(generated_emails)
-                
-                # Create logs
-                log_entries = []
-                for email in generated_emails:
-                    log_entries.append(EmailLog(
-                        email=email,
-                        action='generated',
-                        performed_by=request.user.username if request.user.is_authenticated else 'system',
-                        details=f'Generated from batch: {batch_name}',
-                        metadata={'template_id': template_id, 'batch_name': batch_name}
-                    ))
-                EmailLog.objects.bulk_create(log_entries)
-            
-            # Create campaign record if batch has name
-            if batch_name and generated_emails:
-                campaign = EmailCampaign.objects.create(
-                    name=batch_name,
-                    description=f"Generated {len(generated_emails)} emails",
-                    recipient_count=len(generated_emails),
-                    email_count=len(generated_emails),
-                    status='completed',
-                    created_by=request.user.username if request.user.is_authenticated else 'system'
-                )
-            
-            success_count = len([r for r in results if r['success']])
-            error_count = len([r for r in results if not r['success']])
-            
             return Response({
-                'results': results,
-                'summary': {
-                    'total': len(results),
-                    'success': success_count,
-                    'errors': error_count,
-                    'selection_type': selection_type,
-                    'batch_name': batch_name
-                }
+                'success': True,
+                'sent': sent_count,
+                'failed': failed_count,
+                'results': results
             })
             
-        except EmailTemplate.DoesNotExist:
-            return Response(
-                {'error': 'Template not found'},
-                status=status.HTTP_404_NOT_FOUND
-            )
         except Exception as e:
-            return Response(
-                {'error': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-    
-    @action(detail=True, methods=['post'])
-    def edit_content(self, request, pk=None):
-        """Edit email content manually"""
-        email = self.get_object()
-        
-        subject = request.data.get('subject')
-        body_html = request.data.get('body_html')
-        body_text = request.data.get('body_text')
-        
-        if not any([subject, body_html, body_text]):
-            return Response(
-                {'error': 'No content provided for edit'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Store original values
-        original = {
-            'subject': email.subject,
-            'body_html': email.body_html,
-            'body_text': email.body_text
-        }
-        
-        # Update fields
-        if subject:
-            email.subject = subject
-        if body_html:
-            email.body_html = body_html
-        if body_text:
-            email.body_text = body_text
-        
-        email.status = 'edited'
-        email.edited_by = request.user.username if request.user.is_authenticated else 'user'
-        email.edited_at = timezone.now()
-        email.save()
-        
-        EmailLog.objects.create(
-            email=email,
-            action='edited',
-            performed_by=request.user.username if request.user.is_authenticated else 'user',
-            details='Email content manually edited',
-            metadata={'original': original, 'new': {
-                'subject': email.subject,
-                'body_html_snippet': email.body_html[:100] + '...' if len(email.body_html) > 100 else email.body_html
-            }}
-        )
-        
-        return Response({
-            'status': 'edited',
-            'message': 'Email updated successfully',
-            'edited_at': email.edited_at.isoformat(),
-            'edited_by': email.edited_by
-        })
-    
-    @action(detail=True, methods=['post'])
-    def schedule(self, request, pk=None):
-        """Schedule email for future sending"""
-        email = self.get_object()
-        
-        if email.status != 'approved':
-            return Response(
-                {'error': 'Only approved emails can be scheduled'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        scheduled_for = request.data.get('scheduled_for')
-        if not scheduled_for:
-            return Response(
-                {'error': 'scheduled_for is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        try:
-            scheduled_time = datetime.fromisoformat(scheduled_for.replace('Z', '+00:00'))
-            
-            # Ensure scheduled time is in the future
-            if scheduled_time <= timezone.now():
-                return Response(
-                    {'error': 'Scheduled time must be in the future'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            email.status = 'scheduled'
-            email.scheduled_for = scheduled_time
-            email.save()
-            
-            EmailLog.objects.create(
-                email=email,
-                action='scheduled',
-                performed_by=request.user.username if request.user.is_authenticated else 'user',
-                details=f'Scheduled for {scheduled_time}',
-                metadata={'scheduled_for': scheduled_time.isoformat()}
-            )
-            
             return Response({
-                'status': 'scheduled',
-                'scheduled_for': email.scheduled_for.isoformat(),
-                'message': f'Email scheduled for {scheduled_time}'
-            })
-            
-        except ValueError:
-            return Response(
-                {'error': 'Invalid date format. Use ISO format (e.g., 2024-01-30T14:30:00Z)'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+                'success': False,
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     @action(detail=False, methods=['post'])
     def bulk_action(self, request):
-        """Perform bulk actions on multiple emails"""
-        serializer = BulkActionSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        """Bulk actions on emails"""
+        email_ids = request.data.get('email_ids', [])
+        action = request.data.get('action')  # 'approve', 'reject', 'delete'
         
-        data = serializer.validated_data
-        email_ids = data['email_ids']
-        action = data['action']
-        action_data = data.get('data', {})
+        if not email_ids:
+            return Response({
+                'success': False,
+                'error': 'No email IDs provided'
+            }, status=status.HTTP_400_BAD_REQUEST)
         
         emails = GeneratedEmail.objects.filter(id__in=email_ids)
-        if not emails.exists():
-            return Response(
-                {'error': 'No emails found with provided IDs'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-        
         results = []
-        success_count = 0
         
         for email in emails:
             try:
                 if action == 'approve':
                     if email.status == 'draft':
                         email.status = 'approved'
-                        email.approved_by = request.user.username if request.user.is_authenticated else 'bulk'
                         email.approved_at = timezone.now()
                         email.save()
-                        success_count += 1
                         results.append({'email_id': email.id, 'success': True})
                     else:
-                        results.append({'email_id': email.id, 'success': False, 'error': 'Not in draft status'})
+                        results.append({'email_id': email.id, 'success': False, 'error': 'Not draft'})
                 
                 elif action == 'reject':
                     email.status = 'rejected'
                     email.save()
-                    success_count += 1
                     results.append({'email_id': email.id, 'success': True})
-                
-                elif action == 'send':
-                    if email.can_be_sent():
-                        email_service = self.get_email_service()
-                        result = email_service.send_email(
-                            email.recipient.email,
-                            email.subject,
-                            email.body_html,
-                            email.body_text
-                        )
-                        
-                        if result['success']:
-                            email.status = 'sent'
-                            email.sent_at = timezone.now()
-                            email.ses_message_id = result['message_id']
-                            email.save()
-                            success_count += 1
-                            results.append({'email_id': email.id, 'success': True})
-                        else:
-                            results.append({'email_id': email.id, 'success': False, 'error': result['error']})
-                    else:
-                        results.append({'email_id': email.id, 'success': False, 'error': 'Cannot send email in current state'})
-                
-                elif action == 'schedule':
-                    scheduled_for = action_data.get('scheduled_for')
-                    if scheduled_for and email.status == 'approved':
-                        try:
-                            scheduled_time = datetime.fromisoformat(scheduled_for.replace('Z', '+00:00'))
-                            email.status = 'scheduled'
-                            email.scheduled_for = scheduled_time
-                            email.save()
-                            success_count += 1
-                            results.append({'email_id': email.id, 'success': True})
-                        except ValueError:
-                            results.append({'email_id': email.id, 'success': False, 'error': 'Invalid date format'})
-                    else:
-                        results.append({'email_id': email.id, 'success': False, 'error': 'Cannot schedule email'})
-                
-                elif action == 'archive':
-                    email.status = 'archived'
-                    email.save()
-                    success_count += 1
-                    results.append({'email_id': email.id, 'success': True})
-                
-                elif action == 'regenerate':
-                    # This would require template_id in action_data
-                    results.append({'email_id': email.id, 'success': False, 'error': 'Use individual regenerate endpoint'})
                 
                 elif action == 'delete':
                     if email.status != 'sent':
                         email.delete()
-                        success_count += 1
-                        results.append({'email_id': email.id, 'success': True, 'message': 'Deleted'})
+                        results.append({'email_id': email.id, 'success': True})
                     else:
                         results.append({'email_id': email.id, 'success': False, 'error': 'Cannot delete sent email'})
                 
+                else:
+                    results.append({'email_id': email.id, 'success': False, 'error': 'Invalid action'})
+                    
             except Exception as e:
                 results.append({'email_id': email.id, 'success': False, 'error': str(e)})
+        
+        success_count = len([r for r in results if r['success']])
         
         # Log bulk action
         EmailLog.objects.create(
             action='bulk_action',
-            performed_by=request.user.username if request.user.is_authenticated else 'system',
+            performed_by='system',
             details=f'Bulk {action} on {success_count} emails',
             metadata={
                 'action': action,
                 'total': len(email_ids),
-                'success': success_count,
-                'failed': len(email_ids) - success_count,
-                'action_data': action_data
+                'success': success_count
             }
         )
         
         return Response({
+            'success': True,
             'results': results,
             'summary': {
                 'total': len(email_ids),
                 'success': success_count,
-                'failed': len(email_ids) - success_count,
-                'action': action
+                'failed': len(email_ids) - success_count
             }
         })
-    
-    @action(detail=False, methods=['post'])
-    def send_batch(self, request):
-        """Send a batch of approved emails"""
-        email_ids = request.data.get('email_ids', [])
-        send_type = request.data.get('type', 'selected')  # 'selected' or 'all_approved'
-        
-        if send_type == 'selected' and not email_ids:
-            return Response(
-                {'error': 'No email IDs provided for selected sending'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Get emails to send
-        if send_type == 'selected':
-            emails = GeneratedEmail.objects.filter(
-                id__in=email_ids,
-                status='approved'
-            )
-        else:  # 'all_approved'
-            emails = GeneratedEmail.objects.filter(status='approved')
-        
-        results = []
-        email_service = self.get_email_service()
-        
-        for email in emails:
-            try:
-                result = email_service.send_email(
-                    email.recipient.email,
-                    email.subject,
-                    email.body_html,
-                    email.body_text
-                )
-                
-                if result['success']:
-                    email.status = 'sent'
-                    email.sent_at = timezone.now()
-                    email.ses_message_id = result['message_id']
-                    email.save()
-                    
-                    EmailLog.objects.create(
-                        email=email,
-                        action='sent',
-                        performed_by=request.user.username if request.user.is_authenticated else 'system',
-                        details=f'Sent via batch operation',
-                        metadata={'batch_type': send_type}
-                    )
-                    
-                    results.append({
-                        'email_id': email.id,
-                        'success': True,
-                        'message_id': result['message_id']
-                    })
-                else:
-                    results.append({
-                        'email_id': email.id,
-                        'success': False,
-                        'error': result['error']
-                    })
-                    
-            except Exception as e:
-                results.append({
-                    'email_id': email.id,
-                    'success': False,
-                    'error': str(e)
-                })
-        
-        success_count = len([r for r in results if r['success']])
-        
-        return Response({
-            'results': results,
-            'summary': {
-                'total': len(emails),
-                'success': success_count,
-                'failed': len(emails) - success_count,
-                'send_type': send_type
-            }
-        })
-    
-    @action(detail=False, methods=['get'])
-    def scheduled_emails(self, request):
-        """Get emails scheduled for sending"""
-        now = timezone.now()
-        
-        # Get upcoming scheduled emails
-        upcoming = GeneratedEmail.objects.filter(
-            status='scheduled',
-            scheduled_for__gt=now
-        ).order_by('scheduled_for')
-        
-        # Get overdue scheduled emails (should have been sent)
-        overdue = GeneratedEmail.objects.filter(
-            status='scheduled',
-            scheduled_for__lte=now
-        ).order_by('scheduled_for')
-        
-        upcoming_serializer = self.get_serializer(upcoming, many=True)
-        overdue_serializer = self.get_serializer(overdue, many=True)
-        
-        return Response({
-            'upcoming': upcoming_serializer.data,
-            'overdue': overdue_serializer.data,
-            'current_time': now.isoformat()
-        })
 
-class EmailSchedulerView(APIView):
-    """View for scheduled email operations"""
-    
-    def get(self, request):
-        """Get scheduler status and upcoming jobs"""
-        # Check for emails that should be sent now
-        now = timezone.now()
-        due_emails = GeneratedEmail.objects.filter(
-            status='scheduled',
-            scheduled_for__lte=now
-        )
-        
-        return Response({
-            'due_emails_count': due_emails.count(),
-            'next_check': (now + timedelta(minutes=1)).isoformat(),
-            'system_time': now.isoformat()
-        })
-    
-    def post(self, request):
-        """Process due emails (can be called by cron job)"""
-        try:
-            now = timezone.now()
-            due_emails = GeneratedEmail.objects.filter(
-                status='scheduled',
-                scheduled_for__lte=now
-            ).select_related('recipient')
-            
-            if not due_emails.exists():
-                return Response({'message': 'No emails due for sending'})
-            
-            # Initialize email service
-            email_service = self.get_email_service()
-            results = []
-            
-            for email in due_emails:
-                try:
-                    result = email_service.send_email(
-                        email.recipient.email,
-                        email.subject,
-                        email.body_html,
-                        email.body_text
-                    )
-                    
-                    if result['success']:
-                        email.status = 'sent'
-                        email.sent_at = now
-                        email.ses_message_id = result['message_id']
-                        email.save()
-                        
-                        EmailLog.objects.create(
-                            email=email,
-                            action='sent',
-                            performed_by='scheduler',
-                            details='Automatically sent by scheduler',
-                            metadata={'scheduled_for': email.scheduled_for.isoformat()}
-                        )
-                        
-                        results.append({
-                            'email_id': email.id,
-                            'success': True,
-                            'message_id': result['message_id']
-                        })
-                    else:
-                        email.status = 'failed'
-                        email.error_message = result['error']
-                        email.save()
-                        
-                        results.append({
-                            'email_id': email.id,
-                            'success': False,
-                            'error': result['error']
-                        })
-                        
-                except Exception as e:
-                    results.append({
-                        'email_id': email.id,
-                        'success': False,
-                        'error': str(e)
-                    })
-            
-            success_count = len([r for r in results if r['success']])
-            
-            # Create log for scheduler run
-            EmailLog.objects.create(
-                action='bulk_action',
-                performed_by='scheduler',
-                details=f'Scheduler sent {success_count} emails',
-                metadata={
-                    'total': len(due_emails),
-                    'success': success_count,
-                    'failed': len(due_emails) - success_count
-                }
-            )
-            
-            return Response({
-                'results': results,
-                'summary': {
-                    'total_processed': len(due_emails),
-                    'successful': success_count,
-                    'failed': len(due_emails) - success_count
-                }
-            })
-            
-        except Exception as e:
-            return Response(
-                {'error': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-    
-    def get_email_service(self):
-        """Helper to get email service"""
-        class EmailService:
-            def __init__(self):
-                self.ses_client = boto3.client(
-                    'ses',
-                    region_name='us-east-1',
-                    aws_access_key_id='your-key',
-                    aws_secret_access_key='your-secret'
-                )
-                self.sender = 'no-reply@yourcompany.com'
-            
-            def send_email(self, recipient_email, subject, body_html, body_text):
-                try:
-                    response = self.ses_client.send_email(
-                        Source=self.sender,
-                        Destination={'ToAddresses': [recipient_email]},
-                        Message={
-                            'Subject': {'Data': subject},
-                            'Body': {
-                                'Text': {'Data': body_text},
-                                'Html': {'Data': body_html}
-                            }
-                        }
-                    )
-                    return {'success': True, 'message_id': response['MessageId']}
-                except ClientError as e:
-                    return {'success': False, 'error': e.response['Error']['Message']}
-        
-        return EmailService()
+# ============ OTHER APIS ============
 
-# Other ViewSets remain similar but updated with enhanced features
 class EmailTemplateViewSet(viewsets.ModelViewSet):
+    """API for email templates"""
     queryset = EmailTemplate.objects.filter(is_active=True).order_by('-created_at')
     serializer_class = EmailTemplateSerializer
-    
-    @action(detail=False, methods=['get'])
-    def by_category(self, request):
-        """Get templates grouped by category"""
-        category = request.query_params.get('category')
-        
-        if category:
-            templates = EmailTemplate.objects.filter(
-                category=category,
-                is_active=True
-            )
-        else:
-            templates = EmailTemplate.objects.filter(is_active=True)
-        
-        # Group by category
-        categories = {}
-        for template in templates:
-            if template.category not in categories:
-                categories[template.category] = []
-            categories[template.category].append(
-                EmailTemplateSerializer(template).data
-            )
-        
-        return Response(categories)
-
-class EmailCampaignViewSet(viewsets.ModelViewSet):
-    queryset = EmailCampaign.objects.all().order_by('-created_at')
-    serializer_class = EmailCampaignSerializer
-    
-    @action(detail=True, methods=['get'])
-    def stats(self, request, pk=None):
-        """Get campaign statistics"""
-        campaign = self.get_object()
-        # Implement campaign stats logic
-        return Response({'campaign_id': campaign.id, 'stats': {}})
 
 class EmailLogViewSet(viewsets.ReadOnlyModelViewSet):
+    """API for email logs"""
     queryset = EmailLog.objects.all().order_by('-performed_at')
     serializer_class = EmailLogSerializer
-    filter_backends = [django_filters.DjangoFilterBackend, filters.SearchFilter]
-    filterset_fields = ['action', 'performed_by']
-    search_fields = ['details', 'email__recipient__email']
-
-class SettingViewSet(viewsets.ModelViewSet):
-    queryset = Setting.objects.all()
-    serializer_class = SettingSerializer
     
-    @action(detail=False, methods=['get'])
-    def system_settings(self, request):
-        """Get system settings"""
-        settings_dict = {}
-        for setting in Setting.objects.all():
-            settings_dict[setting.key] = setting.value
+    def list(self, request):
+        """Get logs with filtering"""
+        queryset = self.get_queryset()
         
-        default_settings = {
-            'auto_send_enabled': False,
-            'default_schedule_time': '09:00',
-            'daily_send_limit': 100,
-            'email_check_interval': 5,  # minutes
-            'default_priority': 3,
-            'auto_approve': False
+        action = request.query_params.get('action', '')
+        email_id = request.query_params.get('email_id', '')
+        
+        if action:
+            queryset = queryset.filter(action=action)
+        
+        if email_id:
+            queryset = queryset.filter(email_id=email_id)
+        
+        serializer = self.get_serializer(queryset[:100], many=True)  # Limit to 100
+        return Response({
+            'success': True,
+            'data': serializer.data,
+            'count': queryset.count()
+        })
+
+# ============ DASHBOARD & SYSTEM APIS ============
+
+class DashboardAPI(APIView):
+    """Dashboard statistics"""
+    
+    def get(self, request):
+        # Source database stats
+        source_stats = {}
+        try:
+            with connections['source_db'].cursor() as cursor:
+                cursor.execute("""
+                    SELECT COUNT(*) as total,
+                           COUNT(CASE WHEN active = TRUE THEN 1 END) as active,
+                           COUNT(CASE WHEN email IS NOT NULL AND email != '' THEN 1 END) as with_email
+                    FROM res_partner
+                """)
+                row = cursor.fetchone()
+                source_stats = {
+                    'total': row[0],
+                    'active': row[1],
+                    'with_email': row[2]
+                }
+        except:
+            source_stats = {'error': 'Could not connect to source database'}
+        
+        # Local database stats
+        local_stats = {
+            'recipients': Recipient.objects.count(),
+            'active_recipients': Recipient.objects.filter(is_active=True).count(),
+            'emails': GeneratedEmail.objects.count(),
+            'draft_emails': GeneratedEmail.objects.filter(status='draft').count(),
+            'approved_emails': GeneratedEmail.objects.filter(status='approved').count(),
+            'sent_emails': GeneratedEmail.objects.filter(status='sent').count(),
+            'failed_emails': GeneratedEmail.objects.filter(status='failed').count(),
         }
         
-        # Merge with defaults
-        for key, value in default_settings.items():
-            if key not in settings_dict:
-                settings_dict[key] = value
+        # Recent activity
+        recent_logs = EmailLog.objects.all().order_by('-performed_at')[:10]
+        recent_data = EmailLogSerializer(recent_logs, many=True).data
         
-        return Response(settings_dict)
+        return Response({
+            'success': True,
+            'source_database': source_stats,
+            'local_database': local_stats,
+            'recent_activity': recent_data,
+            'timestamp': timezone.now().isoformat()
+        })
+
+class HealthCheckAPI(APIView):
+    """Health check endpoint"""
+    
+    def get(self, request):
+        # Check source database
+        source_ok = False
+        try:
+            with connections['source_db'].cursor() as cursor:
+                cursor.execute("SELECT 1")
+                source_ok = True
+        except:
+            pass
+        
+        # Check local database
+        local_ok = False
+        try:
+            from django.db import connection
+            connection.ensure_connection()
+            local_ok = True
+        except:
+            pass
+        
+        return Response({
+            'status': 'ok' if source_ok and local_ok else 'degraded',
+            'source_database': 'connected' if source_ok else 'disconnected',
+            'local_database': 'connected' if local_ok else 'disconnected',
+            'timestamp': timezone.now().isoformat()
+        })
