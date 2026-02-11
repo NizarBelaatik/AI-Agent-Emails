@@ -38,17 +38,19 @@ ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '*').split(',')
 # Application definition
 
 INSTALLED_APPS = [
-    'app',
-    
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    
     'rest_framework',
     'corsheaders',
     'django_filters',
+    
+    'data_importer',
+    'core',               # ← added
 ]
 
 MIDDLEWARE = [
@@ -62,8 +64,9 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-# or CORS_ALLOW_ALL_ORIGINS = True
-CORS_ALLOWED_ORIGINS = [
+# or 
+CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOWED_ORIGINS2 = [
     "http://localhost:3000",
     "http://localhost:5173",  # Vite default port
     "http://127.0.0.1:3000",
@@ -93,7 +96,7 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
-DATABASE_ROUTERS = ['app.db_routers.SourceDatabaseRouter']
+DATABASE_ROUTERS = ['data_importer.db_routers.SourceRouter']
 
 DATABASES = {
     'default': {
@@ -102,7 +105,7 @@ DATABASES = {
     },
     'source_db': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('SOURCE_DB_NAME', 'auto_mail_local'),
+        'NAME': os.getenv('SOURCE_DB_NAME', 'odoo_test_full'),
         'USER': os.getenv('SOURCE_DB_USER', 'auto_mail_user'),
         'PASSWORD': os.getenv('SOURCE_DB_PASSWORD', 'odoo'),
         'HOST': os.getenv('SOURCE_DB_HOST', '192.168.1.39'),
@@ -189,6 +192,31 @@ AWS_SES_CONFIG = {
     'SENDER_EMAIL': os.getenv('SENDER_EMAIL', 'no-reply@yourcompany.com'),
 }
 
+#############################
+#############################
+#############################
+
 # LLM Configuration
 OLLAMA_API_URL = os.getenv('OLLAMA_API_URL', 'http://localhost:11434')
 OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama2')
+#OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama3.2:latest')
+
+# OpenAI Configuration (optional)
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
+
+# Alternative LLM providers
+# ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
+# GOOGLE_AI_API_KEY = os.environ.get('GOOGLE_AI_API_KEY', '')
+
+# Email generation settings
+EMAIL_GENERATION_SETTINGS = {
+    'default_model': 'simple',  # 'openai', 'anthropic', 'google', 'simple'
+    'max_tokens': 1000,
+    'temperature': 0.7,
+    'timeout': 30,
+}
+
+
+#############################
+#############################
+#############################
