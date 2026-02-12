@@ -50,7 +50,8 @@ INSTALLED_APPS = [
     'django_filters',
     
     'data_importer',
-    'core',               # ← added
+    'core',     
+    'email_generation',
 ]
 
 MIDDLEWARE = [
@@ -199,6 +200,7 @@ AWS_SES_CONFIG = {
 # LLM Configuration
 OLLAMA_API_URL = os.getenv('OLLAMA_API_URL', 'http://localhost:11434')
 OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama2')
+OLLAMA_MODEL_NAME = os.getenv('OLLAMA_MODEL', 'llama2')
 #OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama3.2:latest')
 
 # OpenAI Configuration (optional)

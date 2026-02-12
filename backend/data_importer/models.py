@@ -92,7 +92,7 @@ class SourcePartner(models.Model):
     x_ice = models.CharField(max_length=255, null=True, blank=True)
     x_source = models.CharField(max_length=255, null=True, blank=True)
     x_capital = models.CharField(max_length=255, null=True, blank=True)
-    x_activitec = models.CharField(max_length=255, null=True, blank=True)
+    x_activitec = models.CharField(max_length=255, null=True, blank=True) # Category
     x_effectif = models.CharField(max_length=255, null=True, blank=True)
     x_forme_juridique = models.CharField(max_length=255, null=True, blank=True)
     x_rc = models.CharField(max_length=255, null=True, blank=True)
@@ -120,7 +120,7 @@ class Recipient(models.Model):
     is_company = models.BooleanField(default=False)
 
     # Custom fields (your Odoo x_ fields)
-    x_activitec = models.CharField(max_length=255, null=True, blank=True)
+    x_activitec = models.CharField(max_length=255, null=True, blank=True) # Category
     x_ice = models.CharField(max_length=255, null=True, blank=True)
     x_source = models.CharField(max_length=255, null=True, blank=True)
     x_capital = models.CharField(

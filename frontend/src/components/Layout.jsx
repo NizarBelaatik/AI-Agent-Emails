@@ -10,8 +10,11 @@ const Layout = () => {
   const navItems = [
     { path: '/', label: 'Dashboard', icon: Home },
     { path: '/import', label: 'Import', icon: Database },
-    { path: '/recipients', label: 'Recipients', icon: Users },
-    { path: '/generate', label: 'Generate', icon: Mail },
+    { path: '/imported', label: 'Imported', icon: Database },
+    { path: '/email-generation', label: 'Email Generation', icon: Mail },
+
+
+    
     { path: '/emails', label: 'Emails', icon: FileText },
     { path: '/scheduled', label: 'Scheduled', icon: Clock },
     { path: '/campaigns', label: 'Campaigns', icon: Layers },
