@@ -140,6 +140,24 @@ export const importerAPI = {
       throw error;
     }
   },
+
+  getImportTaskStatus: async (taskId) => {
+    try {
+      const response = await api.get(`/importer/import-tasks/${taskId}/`);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  cancelImportTask: async (taskId) => {
+    try {
+      const response = await api.post(`/importer/import-tasks/${taskId}/cancel/`);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
 };
 
 export const emailGenerationAPI = {

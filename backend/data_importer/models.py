@@ -227,3 +227,42 @@ class Recipient(models.Model):
 
     def __str__(self):
         return self.name or f"Recipient #{self.source_id}"
+    
+    
+    
+# models.py - Add ImportTask model
+
+# models.py - Add this at the end
+
+class ImportTask(models.Model):
+    STATUS_CHOICES = [
+        ('PENDING', 'En attente'),
+        ('PROGRESS', 'En cours'),
+        ('SUCCESS', 'Terminé'),
+        ('FAILURE', 'Échec'),
+        ('CANCELLED', 'Annulé'),
+    ]
+    
+    task_id = models.CharField(max_length=100, unique=True)
+    selected_ids = models.JSONField(default=list)
+    total_recipients = models.IntegerField(default=0)
+    processed = models.IntegerField(default=0)
+    progress = models.IntegerField(default=0)
+    
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
+    result = models.JSONField(default=dict, blank=True)
+    error_message = models.TextField(blank=True, null=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"Import Task {self.task_id[:8]} - {self.status}"
+
+
+
+

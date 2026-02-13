@@ -1,15 +1,19 @@
+# views.py
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.db.models import Q
 from rest_framework.pagination import PageNumberPagination
-
-from .models import SourcePartner, Recipient
-from .serializers import SourcePartnerSerializer
+from django.utils import timezone
+import threading
+import uuid
 import logging
 
+from .models import SourcePartner, Recipient, ImportTask
+from .serializers import SourcePartnerSerializer
 from .utils import validate_recipient_batch
-
+#from .tasks import import_recipients_task
+from .utils_import import run_import_background
 
 
 logger = logging.getLogger(__name__)
@@ -74,182 +78,163 @@ class BrowseSourceView(APIView):
 
         serializer = SourcePartnerSerializer(page_obj, many=True)
 
-        # Return standard DRF paginated response
         return paginator.get_paginated_response(serializer.data)
+
 
 class ImportRecipientsView(APIView):
     def post(self, request):
         selected_ids = request.data.get('selected_ids', [])
-        limit = int(request.data.get('limit', 500))
-        update_existing = request.data.get('update_existing', True)
+        limit = int(request.data.get('limit', 5000))
 
         if not selected_ids:
             return Response({'success': False, 'error': 'No ids selected'}, status=400)
 
         selected_ids = selected_ids[:limit]
-        source_partners = SourcePartner.objects.using('source_db').filter(id__in=selected_ids)
+        
+        # Create import task
+        task_id = str(uuid.uuid4())
+        task = ImportTask.objects.create(
+            task_id=task_id,
+            selected_ids=selected_ids,
+            total_recipients=len(selected_ids),
+            status='PENDING'
+        )
 
-        # Validate emails before import
-        valid_recipients, invalid_recipients, reasons = validate_recipient_batch(source_partners)
-
-        imported = updated = failed = 0
-        invalid_count = len(invalid_recipients)
-        invalid_details = []
-
-        for sp in source_partners:
-            try:
-                _, created = Recipient.objects.update_or_create(
-                    source_id=sp.id,
-                    defaults={
-                        # Core / common fields
-                        'name': sp.name,
-                        'complete_name': sp.complete_name,
-                        'email': sp.email,
-                        'phone': sp.phone,
-                        'mobile': sp.mobile,
-                        'city': sp.city,
-                        'street': sp.street,
-                        'street2': sp.street2,
-                        'zip': sp.zip,
-                        'active': sp.active,
-                        'is_company': sp.is_company,
-
-                        # Your custom x_ fields (using correct lowercase Python names)
-                        'x_activitec': sp.x_activitec,
-                        'x_ice': sp.x_ice,
-                        'x_source': sp.x_source,
-                        'x_capital': sp.x_capital,
-                        'x_effectif': sp.x_effectif,
-                        'x_forme_juridique': sp.x_forme_juridique,
-                        'x_rc': sp.x_rc,
-                        'x_if': sp.x_if,
-
-                        # All remaining Odoo fields from your list
-                        'company_id': sp.company_id,
-                        'create_date': sp.create_date,
-                        'title': sp.title,
-                        'parent_id': sp.parent_id,
-                        'user_id': sp.user_id,
-                        'state_id': sp.state_id,
-                        'country_id': sp.country_id,
-                        'industry_id': sp.industry_id,
-                        'color': sp.color,
-                        'commercial_partner_id': sp.commercial_partner_id,
-                        'create_uid': sp.create_uid,
-                        'write_uid': sp.write_uid,
-                        'ref': sp.ref,
-                        'lang': sp.lang,
-                        'tz': sp.tz,
-                        'vat': sp.vat,
-                        'company_registry': sp.company_registry,
-                        'website': sp.website,
-                        'function': sp.function,
-                        'type': sp.type,
-                        'commercial_company_name': sp.commercial_company_name,
-                        'company_name': sp.company_name,
-                        'barcode': sp.barcode,
-                        'comment': sp.comment,
-                        'partner_latitude': sp.partner_latitude,
-                        'partner_longitude': sp.partner_longitude,
-                        'partner_share': sp.partner_share,
-                        'write_date': sp.write_date,
-                        'message_bounce': sp.message_bounce,
-                        'email_normalized': sp.email_normalized,
-                        'signup_type': sp.signup_type,
-                        'specific_property_product_pricelist': sp.specific_property_product_pricelist,
-                        'partner_gid': sp.partner_gid,
-                        'additional_info': sp.additional_info,
-                        'phone_sanitized': sp.phone_sanitized,
-                        'invoice_template_pdf_report_id': sp.invoice_template_pdf_report_id,
-                        'supplier_rank': sp.supplier_rank,
-                        'customer_rank': sp.customer_rank,
-                        'invoice_warn': sp.invoice_warn,
-                        'autopost_bills': sp.autopost_bills,
-                        'credit_limit': sp.credit_limit,
-                        'property_account_payable_id': sp.property_account_payable_id,
-                        'property_account_receivable_id': sp.property_account_receivable_id,
-                        'property_account_position_id': sp.property_account_position_id,
-                        'property_payment_term_id': sp.property_payment_term_id,
-                        'property_supplier_payment_term_id': sp.property_supplier_payment_term_id,
-                        'trust': sp.trust,
-                        'ignore_abnormal_invoice_date': sp.ignore_abnormal_invoice_date,
-                        'ignore_abnormal_invoice_amount': sp.ignore_abnormal_invoice_amount,
-                        'invoice_sending_method': sp.invoice_sending_method,
-                        'invoice_edi_format_store': sp.invoice_edi_format_store,
-                        'property_outbound_payment_method_line_id': sp.property_outbound_payment_method_line_id,
-                        'property_inbound_payment_method_line_id': sp.property_inbound_payment_method_line_id,
-                        'invoice_warn_msg': sp.invoice_warn_msg,
-                        'debit_limit': sp.debit_limit,
-                        'peppol_endpoint': sp.peppol_endpoint,
-                        'peppol_eas': sp.peppol_eas,
-                        'sale_warn': sp.sale_warn,
-                        'sale_warn_msg': sp.sale_warn_msg,
-                        'calendar_last_notif_ack': sp.calendar_last_notif_ack,
-                        'website_id': sp.website_id,
-                        'is_published': sp.is_published,
-                        'date_localization': sp.date_localization,
-                        'buyer_id': sp.buyer_id,
-                        'purchase_warn': sp.purchase_warn,
-                        'property_purchase_currency_id': sp.property_purchase_currency_id,
-                        'receipt_reminder_email': sp.receipt_reminder_email,
-                        'reminder_date_before_receipt': sp.reminder_date_before_receipt,
-                        'purchase_warn_msg': sp.purchase_warn_msg,
-                        'is_converted_to_lead': sp.is_converted_to_lead,
-                        'lead_conversion_date': sp.lead_conversion_date,
-                    }
-                )
-                if created:
-                    imported += 1
-                else:
-                    updated += 1
-            except Exception as e:
-                failed += 1
-                logger.error(f"Import failed for ID {sp.id}: {e}")
-
-         # Collect invalid recipients details
-        for sp in invalid_recipients:
-            invalid_details.append({
-                'id': sp.id,
-                'name': sp.name or sp.complete_name,
-                'email': sp.email,
-                'reason': reasons.get(sp.id, "Email invalide")
-            })
+        # Start background thread
+        thread = threading.Thread(
+            target=run_import_background,
+            args=(task_id, selected_ids)
+        )
+        thread.daemon = True
+        thread.start()
 
         return Response({
             'success': True,
-            'stats': {
-                'imported': imported,
-                'updated': updated,
-                'failed': failed,
-                'invalid': invalid_count,
-                'total_selected': len(selected_ids),
-                'valid_count': len(valid_recipients)
-            },
-            'invalid_recipients': invalid_details
-        }, status=status.HTTP_200_OK)
+            'task_id': task_id,
+            'message': 'Import démarré en arrière-plan',
+            'total': len(selected_ids)
+        }, status=status.HTTP_202_ACCEPTED)
+        
+        
+
+
+class ImportTaskStatusView(APIView):
+    def get(self, request, task_id):
+        try:
+            task = ImportTask.objects.get(task_id=task_id)
+            return Response({
+                'task_id': task.task_id,
+                'status': task.status,
+                'progress': task.progress,
+                'processed': task.processed,
+                'total': task.total_recipients,
+                'result': task.result,
+                'error': task.error_message,
+                'created_at': task.created_at,
+                'started_at': task.started_at,
+                'completed_at': task.completed_at
+            })
+        except ImportTask.DoesNotExist:
+            return Response({'error': 'Task not found'}, status=404)
+
+
+class ImportTasksListView(APIView):
+    def get(self, request):
+        tasks = ImportTask.objects.all().order_by('-created_at')[:20]
+        return Response([
+            {
+                'task_id': t.task_id,
+                'status': t.status,
+                'progress': t.progress,
+                'processed': t.processed,
+                'total': t.total_recipients,
+                'created_at': t.created_at,
+                'completed_at': t.completed_at
+            } for t in tasks
+        ])
+
+
+class CancelImportTaskView(APIView):
+    def post(self, request, task_id):
+        try:
+            task = ImportTask.objects.get(task_id=task_id)
+            if task.status in ['PENDING', 'PROGRESS']:
+                # Revoke Celery task
+                from celery.task.control import revoke
+                revoke(task_id, terminate=True)
+                
+                task.status = 'CANCELLED'
+                task.completed_at = timezone.now()
+                task.save()
+                
+                return Response({'success': True, 'message': 'Task cancelled'})
+            else:
+                return Response({'success': False, 'error': 'Task cannot be cancelled'}, status=400)
+        except ImportTask.DoesNotExist:
+            return Response({'error': 'Task not found'}, status=404)
 
 
 class ImportedRecipientsView(APIView):
     def get(self, request):
         queryset = Recipient.objects.all().order_by('-created_at')
+        
+        # Add filters
+        search = request.query_params.get('search', '').strip()
+        x_activitec = request.query_params.get('x_activitec', '').strip()
+        date_from = request.query_params.get('date_from', '')
+        date_to = request.query_params.get('date_to', '')
+        
+        if search:
+            queryset = queryset.filter(
+                Q(name__icontains=search) |
+                Q(complete_name__icontains=search) |
+                Q(email__icontains=search) |
+                Q(company_name__icontains=search) |
+                Q(city__icontains=search)
+            )
+        
+        if x_activitec:
+            queryset = queryset.filter(x_activitec=x_activitec)
+        
+        if date_from:
+            queryset = queryset.filter(created_at__date__gte=date_from)
+        
+        if date_to:
+            queryset = queryset.filter(created_at__date__lte=date_to)
 
         paginator = CustomPagination()
         page_obj = paginator.paginate_queryset(queryset, request)
 
-        serializer = SourcePartnerSerializer(page_obj, many=True)  # reuse for now
+        serializer = SourcePartnerSerializer(page_obj, many=True)
 
         return paginator.get_paginated_response(serializer.data)
     
     
 class InvalidRecipientsView(APIView):
     """
-    Get recipients that failed validation from the last import
+    Get recipients that failed validation from recent imports
     """
     def get(self, request):
-        # This could be stored in cache or session
-        # For simplicity, we'll just return an empty list for now
+        # Get recent import tasks with invalid recipients
+        recent_tasks = ImportTask.objects.filter(
+            status='SUCCESS',
+            result__has_key='invalid_details'
+        ).order_by('-completed_at')[:5]
+        
+        invalid_recipients = []
+        for task in recent_tasks:
+            if task.result and 'invalid_details' in task.result:
+                invalid_recipients.extend(task.result['invalid_details'])
+        
+        # Remove duplicates by ID
+        seen = set()
+        unique_invalid = []
+        for r in invalid_recipients:
+            if r['id'] not in seen:
+                seen.add(r['id'])
+                unique_invalid.append(r)
+        
         return Response({
             'success': True,
-            'invalid_recipients': []
+            'invalid_recipients': unique_invalid[:100]  # Limit to 100
         })
-        

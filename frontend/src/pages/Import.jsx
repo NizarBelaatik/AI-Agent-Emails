@@ -1,15 +1,18 @@
 // src/pages/Import.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Search, Filter, Upload, Check,
   X, ChevronLeft, ChevronRight, Database, RefreshCw, Eye, Users,
-  AlertCircle, Mail, AlertTriangle, CheckCircle2, Download, Clock
+  AlertCircle, Mail, AlertTriangle, CheckCircle2, Download, Clock,
+  Loader2, BarChart
 } from 'lucide-react';
 
 import Header from '../components/Header';
 import Card from '../components/Card';
 import Button from '../components/Button';
 import { importerAPI } from '../services/api';
+
+const POLL_INTERVAL = 2000; // 2 seconds
 
 const Import = () => {
   const [recipients, setRecipients] = useState([]);
@@ -51,6 +54,13 @@ const Import = () => {
   const [previewRecipient, setPreviewRecipient] = useState(null);
   const [errorMessage, setErrorMessage] = useState(null);
   const [importResult, setImportResult] = useState(null);
+  
+  // Import tracking
+  const [activeImportTask, setActiveImportTask] = useState(null);
+  const [importProgress, setImportProgress] = useState(null);
+  const [showProgressModal, setShowProgressModal] = useState(false);
+  
+  const pollIntervalsRef = useRef({});
 
   // Email validation function
   const validateEmail = (email) => {
@@ -108,6 +118,75 @@ const Import = () => {
     }
   }, [activeTab, importedFilters, importedPagination.page]);
 
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      Object.values(pollIntervalsRef.current).forEach(clearInterval);
+    };
+  }, []);
+
+  const startPolling = (taskId) => {
+    if (pollIntervalsRef.current[taskId]) {
+      clearInterval(pollIntervalsRef.current[taskId]);
+    }
+    
+    pollIntervalsRef.current[taskId] = setInterval(() => {
+      pollImportTask(taskId);
+    }, POLL_INTERVAL);
+  };
+
+  const stopPolling = (taskId) => {
+    if (pollIntervalsRef.current[taskId]) {
+      clearInterval(pollIntervalsRef.current[taskId]);
+      delete pollIntervalsRef.current[taskId];
+    }
+  };
+
+  const pollImportTask = async (taskId) => {
+    try {
+      const response = await importerAPI.getImportTaskStatus(taskId);
+      
+      setImportProgress(response);
+      
+      if (response.status === 'SUCCESS') {
+        stopPolling(taskId);
+        setActiveImportTask(null);
+        setShowProgressModal(false);
+        
+        // Show success message with results
+        let message = `✅ Import terminé !\n\n`;
+        message += `📥 Importés : ${response.result?.imported || 0}\n`;
+        message += `🔄 Mis à jour : ${response.result?.updated || 0}\n`;
+        message += `❌ Échecs : ${response.result?.failed || 0}\n`;
+        
+        if (response.result?.invalid > 0) {
+          message += `⚠️ Emails invalides : ${response.result.invalid}\n`;
+          setInvalidRecipients(response.result.invalid_details || []);
+        }
+        
+        alert(message);
+        
+        // Refresh all data
+        fetchRecipients();
+        fetchStats();
+        fetchImportedRecipients();
+        fetchInvalidRecipients();
+        setSelectedRecipients(new Set());
+        setImportResult(response.result);
+        
+      } else if (response.status === 'FAILURE') {
+        stopPolling(taskId);
+        setActiveImportTask(null);
+        setShowProgressModal(false);
+        setErrorMessage(response.error || 'Erreur lors de l\'import');
+      }
+      // Keep polling for PROGRESS and PENDING
+      
+    } catch (err) {
+      console.error('Polling error:', err);
+    }
+  };
+
   const fetchRecipients = async () => {
     setErrorMessage(null);
     try {
@@ -121,12 +200,8 @@ const Import = () => {
         page_size: pagination.pageSize,
       };
 
-      console.log('[DEBUG] Fetching with params:', params);
-
       const data = await importerAPI.browseSource(params);
       
-      console.log('[DEBUG] API response data:', data);
-
       if (data && Array.isArray(data.results)) {
         setRecipients(data.results);
         
@@ -150,13 +225,11 @@ const Import = () => {
         // Clear selections when data changes
         setSelectedRecipients(new Set());
       } else {
-        console.warn('[DEBUG] Invalid data format:', data);
         setErrorMessage('Format de données invalide du serveur');
         setValidRecipients([]);
         setInvalidRecipients([]);
       }
     } catch (error) {
-      console.error('[DEBUG] Fetch failed:', error);
       setErrorMessage(error.error || 'Erreur de chargement des données');
       setValidRecipients([]);
       setInvalidRecipients([]);
@@ -219,8 +292,6 @@ const Import = () => {
   const fetchStats = async () => {
     try {
       const response = await importerAPI.getSourceStats();
-      console.log('[DEBUG] Stats response:', response);
-      
       if (response && response.success) {
         setStats(response.stats);
       }
@@ -237,29 +308,40 @@ const Import = () => {
       return;
     }
 
-    if (!window.confirm(`Importer ${validSelectedIds.length} destinataire(s) avec email valide ?`)) {
+    if (!window.confirm(`Importer ${validSelectedIds.length} destinataire(s) avec email valide ?\n\n⏱️ L'import peut prendre quelques minutes.`)) {
       return;
     }
 
     try {
       setImporting(true);
       setImportResult(null);
-
-      console.log('[DEBUG] Selected IDs:', validSelectedIds);
+      setErrorMessage(null);
 
       const payload = {
         selected_ids: validSelectedIds,
-        limit: 500,
+        limit: 5000,
         update_existing: true,
       };
 
       const result = await importerAPI.importRecipients(payload);
-      console.log('[DEBUG] Import result:', result);
-
-      if (result && result.success) {
+      
+      if (result && result.task_id) {
+        setActiveImportTask(result.task_id);
+        setShowProgressModal(true);
+        startPolling(result.task_id);
+        
+        setImportProgress({
+          status: 'PENDING',
+          progress: 0,
+          processed: 0,
+          total: validSelectedIds.length
+        });
+        
+        setSelectedRecipients(new Set());
+      } else if (result && result.success) {
+        // Fallback for synchronous response
         setImportResult(result);
         
-        // Show success message
         let message = `✅ Import terminé !\n\n`;
         message += `📥 Importés : ${result.stats?.imported || 0}\n`;
         message += `🔄 Mis à jour : ${result.stats?.updated || 0}\n`;
@@ -272,17 +354,32 @@ const Import = () => {
 
         alert(message);
 
-        // Clear selections and refresh
         setSelectedRecipients(new Set());
         fetchRecipients();
         fetchStats();
-        fetchImportedRecipients(); // Refresh imported list
+        fetchImportedRecipients();
       }
     } catch (err) {
       console.error('[DEBUG] Import failed:', err);
-      alert(`Erreur d'import: ${err.error || err.message || 'Erreur inconnue'}`);
+      setErrorMessage(err.error || err.message || 'Erreur lors de l\'import');
     } finally {
       setImporting(false);
+    }
+  };
+
+  const cancelImport = async () => {
+    if (!activeImportTask) return;
+    
+    if (!window.confirm('Voulez-vous annuler cet import ?')) return;
+    
+    try {
+      await importerAPI.cancelImportTask(activeImportTask);
+      stopPolling(activeImportTask);
+      setActiveImportTask(null);
+      setShowProgressModal(false);
+      setImportProgress(null);
+    } catch (err) {
+      console.error('Failed to cancel import:', err);
     }
   };
 
@@ -357,6 +454,35 @@ const Import = () => {
         description="Parcourez et importez les partenaires de votre base Odoo"
       />
 
+      {/* Active Import Banner */}
+      {activeImportTask && (
+        <Card className="mb-8 bg-indigo-50 border-indigo-200">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Loader2 className="animate-spin h-5 w-5 text-indigo-600" />
+              <div>
+                <span className="font-medium text-indigo-900">
+                  Import en cours...
+                </span>
+                {importProgress && (
+                  <p className="text-sm text-indigo-700">
+                    {importProgress.processed || 0} / {importProgress.total || 0} traités
+                  </p>
+                )}
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowProgressModal(true)}
+            >
+              <BarChart size={16} className="mr-2" />
+              Voir progression
+            </Button>
+          </div>
+        </Card>
+      )}
+
       {/* Stats Cards */}
       {stats && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
@@ -402,9 +528,9 @@ const Import = () => {
               <div>
                 <p className="text-sm text-amber-700">Importés</p>
                 <p className="text-3xl font-bold text-amber-800 mt-1">
-                  {importedRecipients.length}
+                  {importedPagination.totalCount?.toLocaleString() || '0'}
                 </p>
-                <p className="text-xs text-amber-600 mt-1">Cette page</p>
+                <p className="text-xs text-amber-600 mt-1">Total</p>
               </div>
               <Download className="text-amber-600" size={32} />
             </div>
@@ -423,25 +549,25 @@ const Import = () => {
                 <div>
                   <p className="text-sm text-green-700">Importés</p>
                   <p className="text-2xl font-bold text-green-800">
-                    {importResult.stats?.imported || 0}
+                    {importResult.stats?.imported || importResult.imported || 0}
                   </p>
                 </div>
                 <div>
                   <p className="text-sm text-green-700">Mis à jour</p>
                   <p className="text-2xl font-bold text-green-800">
-                    {importResult.stats?.updated || 0}
+                    {importResult.stats?.updated || importResult.updated || 0}
                   </p>
                 </div>
                 <div>
                   <p className="text-sm text-red-700">Échecs</p>
                   <p className="text-2xl font-bold text-red-800">
-                    {importResult.stats?.failed || 0}
+                    {importResult.stats?.failed || importResult.failed || 0}
                   </p>
                 </div>
                 <div>
                   <p className="text-sm text-yellow-700">Invalides</p>
                   <p className="text-2xl font-bold text-yellow-800">
-                    {importResult.stats?.invalid || 0}
+                    {importResult.stats?.invalid || importResult.invalid || 0}
                   </p>
                 </div>
               </div>
@@ -581,7 +707,7 @@ const Import = () => {
                   <Button
                     variant="primary"
                     onClick={handleImport}
-                    disabled={selectedRecipients.size === 0 || importing}
+                    disabled={selectedRecipients.size === 0 || importing || activeImportTask}
                     loading={importing}
                   >
                     <Upload size={16} className="mr-2" />
@@ -939,6 +1065,79 @@ const Import = () => {
             </>
           )}
         </Card>
+      )}
+
+      {/* Progress Modal */}
+      {showProgressModal && importProgress && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl max-w-md w-full shadow-2xl">
+            <div className="flex items-center justify-between px-6 py-4 border-b">
+              <h2 className="text-xl font-semibold flex items-center gap-2">
+                <Loader2 className="animate-spin h-5 w-5 text-indigo-600" />
+                Import en cours
+              </h2>
+              <button
+                onClick={() => setShowProgressModal(false)}
+                className="text-gray-500 hover:text-gray-800"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-6 space-y-4">
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-600">Statut:</span>
+                  <span className="font-medium text-indigo-600">
+                    {importProgress.status === 'PROGRESS' ? 'Traitement...' : 
+                     importProgress.status === 'PENDING' ? 'En attente...' : 
+                     importProgress.status}
+                  </span>
+                </div>
+                
+                <div className="space-y-1">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600">Progression:</span>
+                    <span className="font-medium">
+                      {importProgress.processed || 0} / {importProgress.total || 0}
+                    </span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-2.5">
+                    <div 
+                      className="bg-indigo-600 h-2.5 rounded-full transition-all duration-300"
+                      style={{ 
+                        width: `${importProgress.total > 0 
+                          ? ((importProgress.processed || 0) / importProgress.total) * 100 
+                          : 0}%` 
+                      }}
+                    />
+                  </div>
+                </div>
+                
+                <div className="text-sm text-gray-500 mt-4">
+                  {importProgress.processed || 0} destinataires traités sur {importProgress.total || 0}
+                </div>
+              </div>
+              
+              <div className="flex gap-2 pt-4">
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => setShowProgressModal(false)}
+                >
+                  Fermer
+                </Button>
+                <Button
+                  variant="danger"
+                  className="flex-1"
+                  onClick={cancelImport}
+                >
+                  Annuler
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Preview Modal */}
