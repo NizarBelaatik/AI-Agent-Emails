@@ -8,9 +8,16 @@ psycopg2-binary>=2.9.9   # if you're using PostgreSQL
 python-dotenv>=1.0.1     # optional (if you prefer dotenv)
 
 requests>=2.31.0         # often used in LLM/email services
+
+celery
+redis
+
 #openai>=1.10.0           # if your LLMService uses OpenAI
 ollama
 jinja
 gunicorn>=21.2.0         # for deployment
 
 boto3==1.34.0
+
+
+email-validator

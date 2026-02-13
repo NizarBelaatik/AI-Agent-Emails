@@ -19,6 +19,7 @@ load_dotenv()
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+HOST_NAME_ID = '192.168.1.39'
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
@@ -44,6 +45,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django.contrib.postgres',
     
     'rest_framework',
     'corsheaders',
@@ -222,3 +224,40 @@ EMAIL_GENERATION_SETTINGS = {
 #############################
 #############################
 #############################
+
+
+#############################
+#### CELERY
+#############################
+# Celery Configuration
+CELERY_BROKER_URL = f'redis://{HOST_NAME_ID}:6379/0'
+# settings.py
+
+# Celery Configuration for Remote Redis
+REDIS_HOST = HOST_NAME_ID  # Replace with your Redis server IP
+REDIS_PORT = 6379
+REDIS_PASSWORD = None  # Add if you set a password
+REDIS_DB = 0
+
+# Construct Redis URL
+if REDIS_PASSWORD:
+    CELERY_BROKER_URL = f'redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}'
+    CELERY_RESULT_BACKEND = f'redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}'
+else:
+    CELERY_BROKER_URL = f'redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}'
+    CELERY_RESULT_BACKEND = f'redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}'
+
+# Optional: Add socket timeout
+CELERY_BROKER_TRANSPORT_OPTIONS = {
+    'socket_timeout': 5,
+    'socket_connect_timeout': 5,
+}
+
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'
+
+# Task timeouts
+CELERY_TASK_TIME_LIMIT = 30 * 60
+CELERY_TASK_SOFT_TIME_LIMIT = 25 * 60

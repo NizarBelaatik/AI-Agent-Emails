@@ -8,6 +8,10 @@ from .models import SourcePartner, Recipient
 from .serializers import SourcePartnerSerializer
 import logging
 
+from .utils import validate_recipient_batch
+
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -70,8 +74,8 @@ class BrowseSourceView(APIView):
 
         serializer = SourcePartnerSerializer(page_obj, many=True)
 
+        # Return standard DRF paginated response
         return paginator.get_paginated_response(serializer.data)
-
 
 class ImportRecipientsView(APIView):
     def post(self, request):
@@ -85,7 +89,12 @@ class ImportRecipientsView(APIView):
         selected_ids = selected_ids[:limit]
         source_partners = SourcePartner.objects.using('source_db').filter(id__in=selected_ids)
 
+        # Validate emails before import
+        valid_recipients, invalid_recipients, reasons = validate_recipient_batch(source_partners)
+
         imported = updated = failed = 0
+        invalid_count = len(invalid_recipients)
+        invalid_details = []
 
         for sp in source_partners:
             try:
@@ -197,13 +206,26 @@ class ImportRecipientsView(APIView):
                 failed += 1
                 logger.error(f"Import failed for ID {sp.id}: {e}")
 
+         # Collect invalid recipients details
+        for sp in invalid_recipients:
+            invalid_details.append({
+                'id': sp.id,
+                'name': sp.name or sp.complete_name,
+                'email': sp.email,
+                'reason': reasons.get(sp.id, "Email invalide")
+            })
+
         return Response({
             'success': True,
             'stats': {
                 'imported': imported,
                 'updated': updated,
-                'failed': failed
-            }
+                'failed': failed,
+                'invalid': invalid_count,
+                'total_selected': len(selected_ids),
+                'valid_count': len(valid_recipients)
+            },
+            'invalid_recipients': invalid_details
         }, status=status.HTTP_200_OK)
 
 
@@ -217,3 +239,17 @@ class ImportedRecipientsView(APIView):
         serializer = SourcePartnerSerializer(page_obj, many=True)  # reuse for now
 
         return paginator.get_paginated_response(serializer.data)
+    
+    
+class InvalidRecipientsView(APIView):
+    """
+    Get recipients that failed validation from the last import
+    """
+    def get(self, request):
+        # This could be stored in cache or session
+        # For simplicity, we'll just return an empty list for now
+        return Response({
+            'success': True,
+            'invalid_recipients': []
+        })
+        

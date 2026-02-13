@@ -1,262 +1,470 @@
-// src/pages/Dashboard.jsx
 import React, { useState, useEffect } from 'react';
-import { 
-  Users, Mail, CheckCircle, Clock, AlertCircle, 
-  TrendingUp, Calendar, Database 
+import {
+  Users, Mail, Send, CheckCircle, Clock, AlertCircle,
+  TrendingUp, Download, Calendar, Filter, RefreshCw,
+  BarChart, PieChart, Activity, Zap, Target, Archive, Loader2
 } from 'lucide-react';
+
 import Header from '../components/Header';
 import Card from '../components/Card';
 import Button from '../components/Button';
-//import { sourceAPI, emailsAPI, recipientsAPI } from '../services/api';
-import { sourceAPI, recipientsAPI, importJobsAPI, dashboardAPI } from '../services/api';
-const StatCard = ({ icon: Icon, label, value, change, color }) => (
-  <Card className="hover:shadow-md transition-shadow">
-    <div className="flex items-center justify-between">
-      <div>
-        <p className="text-sm text-gray-500 mb-1">{label}</p>
-        <p className="text-2xl font-bold text-gray-900">{value}</p>
-        {change && (
-          <p className={`text-xs mt-1 ${change > 0 ? 'text-green-600' : 'text-red-600'}`}>
-            {change > 0 ? '↑' : '↓'} {Math.abs(change)}% from last week
-          </p>
-        )}
-      </div>
-      <div className={`p-3 rounded-lg ${color} bg-opacity-10`}>
-        <Icon className={color} size={24} />
-      </div>
-    </div>
-  </Card>
-);
+import { dashboardAPI } from '../services/api';
 
 const Dashboard = () => {
-  const [stats, setStats] = useState({
-    sourceRecipients: 0,
-    importedRecipients: 0,
-    totalEmails: 0,
-    draftEmails: 0,
-    approvedEmails: 0,
-    scheduledEmails: 0,
-    sentEmails: 0,
-    failedEmails: 0,
-  });
+  const [stats, setStats] = useState(null);
+  const [queueData, setQueueData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [recentActivity, setRecentActivity] = useState([]);
+  const [error, setError] = useState(null);
+  const [activeTab, setActiveTab] = useState('overview');
+  const [dateRange, setDateRange] = useState('7d');
 
   useEffect(() => {
     fetchDashboardData();
+    const interval = setInterval(fetchDashboardData, 30000);
+    return () => clearInterval(interval);
   }, []);
 
   const fetchDashboardData = async () => {
     try {
-      setLoading(true);
-      const [sourceStats, emailStats, recipientStats] = await Promise.all([
-        sourceAPI.getStats(),
-        emailsAPI.getDashboard(),
-        recipientsAPI.getDashboard(),
-      ]);
-
-      setStats({
-        sourceRecipients: sourceStats.data.total_recipients || 0,
-        importedRecipients: recipientStats.data.total || 0,
-        totalEmails: emailStats.data.total_emails || 0,
-        draftEmails: emailStats.data.status_stats?.draft || 0,
-        approvedEmails: emailStats.data.status_stats?.approved || 0,
-        scheduledEmails: emailStats.data.status_stats?.scheduled || 0,
-        sentEmails: emailStats.data.status_stats?.sent || 0,
-        failedEmails: emailStats.data.status_stats?.failed || 0,
-      });
-
-      setRecentActivity(emailStats.data.recent_activity || []);
+      setError(null);
+      const data = await dashboardAPI.getStats();
+      setStats(data);
+      
+      const queue = await dashboardAPI.getGenerationQueue();
+      setQueueData(queue);
     } catch (error) {
-      console.error('Error fetching dashboard data:', error);
+      console.error('Failed to fetch dashboard data:', error);
+      setError('Impossible de charger les données du tableau de bord');
     } finally {
       setLoading(false);
     }
   };
 
-  const quickActions = [
-    { label: 'Import Recipients', path: '/import', icon: Database },
-    { label: 'Generate Emails', path: '/generate', icon: Mail },
-    { label: 'Review Drafts', path: '/emails?status=draft', icon: CheckCircle },
-    { label: 'Schedule Emails', path: '/scheduled', icon: Calendar },
-  ];
+  const handleRefresh = () => {
+    setLoading(true);
+    fetchDashboardData();
+  };
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
+      <div className="flex items-center justify-center h-screen">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Loading dashboard...</p>
+          <Loader2 className="animate-spin h-12 w-12 text-indigo-600 mx-auto mb-4" />
+          <p className="text-gray-600">Chargement du tableau de bord...</p>
         </div>
       </div>
     );
   }
 
-  return (
-    <div>
-      <Header
-        title="Dashboard"
-        description="Overview of your email automation system"
-      >
-        <div className="flex gap-4 mb-6">
-          {quickActions.map((action) => (
-            <Button
-              key={action.label}
-              variant="outline"
-              className="flex items-center gap-2"
-              onClick={() => window.location.href = action.path}
-            >
-              <action.icon size={16} />
-              {action.label}
-            </Button>
-          ))}
-        </div>
-      </Header>
+  // Default values if stats is null
+  const safeStats = stats || {
+    quick_stats: {
+      total_recipients: 0,
+      total_emails_generated: 0,
+      total_emails_sent: 0,
+      active_templates: 0,
+    },
+    today: {
+      recipients_imported: 0,
+      emails_generated: 0,
+      emails_sent: 0,
+      emails_failed: 0,
+      emails_in_queue: 0,
+      emails_ready: 0,
+    },
+    queue_status: {
+      pending_generation: 0,
+      generating: 0,
+      ready_to_send: 0,
+      sending: 0,
+    },
+    last_7_days: [],
+    categories: [],
+    recent_activity: [],
+    performance: {
+      avg_generation_time: 0,
+      avg_sending_time: 0,
+      success_rate: 100,
+      peak_hours: [{ hour: 8 }],
+    },
+  };
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        <StatCard
-          icon={Database}
-          label="Source Recipients"
-          value={stats.sourceRecipients.toLocaleString()}
-          color="text-blue-600"
+  const safeQueueData = queueData || {
+    pending: [],
+    generating: [],
+    stats: {
+      total_in_queue: 0,
+      pending_count: 0,
+      generating_count: 0,
+      estimated_time: '0 secondes',
+    },
+  };
+
+  return (
+    <div className="p-6 max-w-7xl mx-auto space-y-8">
+      <div className="flex items-center justify-between">
+        <Header
+          title="Tableau de bord"
+          description="Vue d'ensemble de votre activité email"
         />
-        <StatCard
-          icon={Users}
-          label="Imported Recipients"
-          value={stats.importedRecipients.toLocaleString()}
-          color="text-green-600"
-        />
-        <StatCard
-          icon={Mail}
-          label="Total Emails"
-          value={stats.totalEmails.toLocaleString()}
-          color="text-purple-600"
-        />
-        <StatCard
-          icon={CheckCircle}
-          label="Sent Today"
-          value={stats.sentEmails.toLocaleString()}
-          color="text-green-600"
-        />
+        <Button variant="outline" onClick={handleRefresh} className="flex items-center gap-2">
+          <RefreshCw size={16} />
+          Actualiser
+        </Button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-        {/* Email Status */}
-        <Card title="Email Status" className="lg:col-span-2">
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-3 h-3 bg-yellow-500 rounded-full"></div>
-                <span className="text-gray-700">Draft</span>
-              </div>
-              <span className="font-semibold">{stats.draftEmails}</span>
+      {error && (
+        <Card className="bg-red-50 border-red-200">
+          <div className="flex items-center gap-3 text-red-800">
+            <AlertCircle size={20} />
+            <p>{error}</p>
+          </div>
+        </Card>
+      )}
+
+      {/* Quick Stats Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <Card className="bg-gradient-to-br from-indigo-500 to-indigo-600 text-white">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-indigo-100 text-sm">Destinataires</p>
+              <p className="text-3xl font-bold">{safeStats.quick_stats.total_recipients}</p>
+              <p className="text-indigo-100 text-xs mt-2">
+                +{safeStats.today.recipients_imported} aujourd'hui
+              </p>
             </div>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-3 h-3 bg-green-500 rounded-full"></div>
-                <span className="text-gray-700">Approved</span>
-              </div>
-              <span className="font-semibold">{stats.approvedEmails}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
-                <span className="text-gray-700">Scheduled</span>
-              </div>
-              <span className="font-semibold">{stats.scheduledEmails}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-3 h-3 bg-purple-500 rounded-full"></div>
-                <span className="text-gray-700">Sent</span>
-              </div>
-              <span className="font-semibold">{stats.sentEmails}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-3 h-3 bg-red-500 rounded-full"></div>
-                <span className="text-gray-700">Failed</span>
-              </div>
-              <span className="font-semibold">{stats.failedEmails}</span>
-            </div>
+            <Users size={48} className="opacity-50" />
           </div>
         </Card>
 
-        {/* Recent Activity */}
-        <Card title="Recent Activity">
-          <div className="space-y-4">
-            {recentActivity.slice(0, 5).map((activity, index) => (
-              <div key={index} className="flex items-center justify-between">
-                <div>
-                  <p className="font-medium text-gray-900">{activity.action}</p>
-                  <p className="text-xs text-gray-500">{activity.count} actions</p>
+        <Card className="bg-gradient-to-br from-green-500 to-green-600 text-white">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-green-100 text-sm">Emails générés</p>
+              <p className="text-3xl font-bold">{safeStats.quick_stats.total_emails_generated}</p>
+              <p className="text-green-100 text-xs mt-2">
+                +{safeStats.today.emails_generated} aujourd'hui
+              </p>
+            </div>
+            <Mail size={48} className="opacity-50" />
+          </div>
+        </Card>
+
+        <Card className="bg-gradient-to-br from-blue-500 to-blue-600 text-white">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-blue-100 text-sm">Emails envoyés</p>
+              <p className="text-3xl font-bold">{safeStats.quick_stats.total_emails_sent}</p>
+              <p className="text-blue-100 text-xs mt-2">
+                +{safeStats.today.emails_sent} aujourd'hui
+              </p>
+            </div>
+            <Send size={48} className="opacity-50" />
+          </div>
+        </Card>
+
+        <Card className="bg-gradient-to-br from-purple-500 to-purple-600 text-white">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-purple-100 text-sm">Templates actifs</p>
+              <p className="text-3xl font-bold">{safeStats.quick_stats.active_templates}</p>
+              <p className="text-purple-100 text-xs mt-2">
+                {safeStats.categories?.length || 0} catégories
+              </p>
+            </div>
+            <Target size={48} className="opacity-50" />
+          </div>
+        </Card>
+      </div>
+
+      {/* Queue Status */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold flex items-center gap-2">
+              <Clock className="text-indigo-600" size={20} />
+              File de génération
+            </h3>
+            <span className="text-sm text-gray-500">
+              {safeQueueData.stats.total_in_queue} en attente
+            </span>
+          </div>
+          
+          <div className="space-y-4 max-h-96 overflow-y-auto">
+            {safeQueueData.pending?.length > 0 ? (
+              safeQueueData.pending.slice(0, 5).map((item, index) => (
+                <div key={item.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm font-medium text-gray-500">#{index + 1}</span>
+                    <div>
+                      <p className="font-medium">{item.recipient || 'Inconnu'}</p>
+                      <p className="text-xs text-gray-500">{item.category || 'Général'}</p>
+                    </div>
+                  </div>
+                  <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded-full">
+                    En attente
+                  </span>
                 </div>
-                <TrendingUp size={16} className="text-green-600" />
+              ))
+            ) : safeQueueData.generating?.length > 0 ? (
+              safeQueueData.generating.slice(0, 3).map((item) => (
+                <div key={item.id} className="flex items-center justify-between p-3 bg-indigo-50 rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <Loader2 className="animate-spin h-4 w-4 text-indigo-600" />
+                    <div>
+                      <p className="font-medium">{item.recipient || 'Inconnu'}</p>
+                      <p className="text-xs text-gray-500">Génération en cours...</p>
+                    </div>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="text-center py-8 text-gray-500">
+                <CheckCircle size={40} className="mx-auto mb-2 opacity-50" />
+                <p>Aucun email en attente</p>
               </div>
-            ))}
-            {recentActivity.length === 0 && (
-              <p className="text-gray-500 text-center py-4">No recent activity</p>
+            )}
+          </div>
+          
+          <Button 
+            variant="outline" 
+            className="w-full mt-4"
+            onClick={() => window.location.href = '/email-generation/queue'}
+          >
+            Voir toute la file
+          </Button>
+        </Card>
+
+        <Card>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold flex items-center gap-2">
+              <Send className="text-green-600" size={20} />
+              Prêts à envoyer
+            </h3>
+            <span className="text-sm text-gray-500">
+              {safeStats.queue_status.ready_to_send || 0} emails
+            </span>
+          </div>
+          
+          <div className="space-y-4">
+            {safeStats.queue_status.ready_to_send > 0 ? (
+              <div className="bg-green-50 p-4 rounded-lg">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-medium">Campagne prête</span>
+                  <span className="text-2xl font-bold text-green-600">
+                    {safeStats.queue_status.ready_to_send}
+                  </span>
+                </div>
+                <p className="text-sm text-gray-600">
+                  Emails générés et prêts à être envoyés
+                </p>
+                <Button variant="primary" className="mt-3 w-full">
+                  <Send size={16} className="mr-2" />
+                  Envoyer maintenant
+                </Button>
+              </div>
+            ) : (
+              <div className="text-center py-8 text-gray-500">
+                <Mail size={40} className="mx-auto mb-2 opacity-50" />
+                <p>Aucun email prêt à envoyer</p>
+              </div>
             )}
           </div>
         </Card>
       </div>
 
-      {/* Quick Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <Card title="Quick Actions">
-          <div className="space-y-3">
-            <Button variant="primary" className="w-full justify-center">
-              <Mail size={16} />
-              Generate New Campaign
-            </Button>
-            <Button variant="outline" className="w-full justify-center">
-              <Users size={16} />
-              Import More Recipients
-            </Button>
-            <Button variant="outline" className="w-full justify-center">
-              <Calendar size={16} />
-              Schedule All Approved
-            </Button>
-          </div>
-        </Card>
-
-        <Card title="System Status">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-gray-700">API Connection</span>
-              <span className="px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full">
-                Connected
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-gray-700">Email Service</span>
-              <span className="px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full">
-                Active
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-gray-700">LLM Service</span>
-              <span className="px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full">
-                Ready
-              </span>
-            </div>
-          </div>
-        </Card>
-
-        <Card title="Upcoming">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="font-medium text-gray-900">Scheduled Emails</p>
-                <p className="text-xs text-gray-500">Next 24 hours</p>
-              </div>
-              <span className="text-xl font-bold">{stats.scheduledEmails}</span>
-            </div>
-            <div className="pt-3 border-t border-gray-200">
-              <Button variant="ghost" className="w-full justify-center text-sm">
-                View All Scheduled
+      {/* Charts & Analytics */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Last 7 Days Chart */}
+        <Card className="lg:col-span-2">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold">Activité des 7 derniers jours</h3>
+            <div className="flex gap-2">
+              <Button 
+                variant={dateRange === '7d' ? 'primary' : 'outline'} 
+                size="sm"
+                onClick={() => setDateRange('7d')}
+              >
+                7j
               </Button>
+              <Button 
+                variant={dateRange === '30d' ? 'primary' : 'outline'} 
+                size="sm"
+                onClick={() => setDateRange('30d')}
+              >
+                30j
+              </Button>
+            </div>
+          </div>
+          
+          <div className="h-64">
+            {safeStats.last_7_days?.length > 0 ? (
+              <div className="flex h-full items-end justify-around">
+                {safeStats.last_7_days.map((day) => {
+                  const maxHeight = Math.max(...safeStats.last_7_days.map(d => d.generated), 1);
+                  const height = maxHeight > 0 ? (day.generated / maxHeight) * 180 : 20;
+                  return (
+                    <div key={day.date} className="flex flex-col items-center w-16">
+                      <div className="text-xs text-gray-500 mb-1">{day.day}</div>
+                      <div 
+                        className="w-8 bg-indigo-500 rounded-t transition-all duration-300"
+                        style={{ height: `${Math.max(height, 4)}px` }}
+                      />
+                      <div className="text-xs mt-1 font-medium">{day.generated}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="flex items-center justify-center h-full text-gray-500">
+                <p>Aucune donnée disponible</p>
+              </div>
+            )}
+          </div>
+          
+          <div className="flex justify-center gap-6 mt-4 text-sm">
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 bg-indigo-500 rounded"></div>
+              <span>Générés</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 bg-green-500 rounded"></div>
+              <span>Envoyés</span>
+            </div>
+          </div>
+        </Card>
+
+        {/* Categories Distribution */}
+        <Card>
+          <h3 className="text-lg font-semibold mb-4">Distribution par catégorie</h3>
+          <div className="space-y-3 max-h-80 overflow-y-auto">
+            {safeStats.categories?.length > 0 ? (
+              safeStats.categories.slice(0, 5).map((cat) => {
+                const total = safeStats.quick_stats.total_emails_generated || 1;
+                const percentage = total > 0 ? (cat.total / total) * 100 : 0;
+                return (
+                  <div key={cat.name} className="flex items-center justify-between">
+                    <span className="text-sm truncate max-w-[150px]">{cat.name}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">{cat.total}</span>
+                      <div className="w-16 bg-gray-200 rounded-full h-1.5">
+                        <div 
+                          className="bg-indigo-600 h-1.5 rounded-full transition-all duration-300"
+                          style={{ width: `${Math.min(percentage, 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="text-center py-8 text-gray-500">
+                <p>Aucune catégorie</p>
+              </div>
+            )}
+          </div>
+          
+          <div className="mt-4 pt-4 border-t">
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600">Aujourd'hui</span>
+              <span className="font-medium">{safeStats.today.emails_generated} générés</span>
+            </div>
+            <div className="flex justify-between text-sm mt-1">
+              <span className="text-gray-600">Taux de succès</span>
+              <span className="font-medium text-green-600">{safeStats.performance.success_rate}%</span>
+            </div>
+          </div>
+        </Card>
+      </div>
+
+      {/* Recent Activity */}
+      <Card>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold flex items-center gap-2">
+            <Activity size={20} className="text-indigo-600" />
+            Activité récente
+          </h3>
+        </div>
+        
+        <div className="space-y-3 max-h-96 overflow-y-auto">
+          {safeStats.recent_activity?.length > 0 ? (
+            safeStats.recent_activity.map((activity, index) => (
+              <div key={index} className="flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg">
+                <div className="flex items-center gap-3">
+                  {activity.type === 'generation' && (
+                    <Mail className="text-green-600" size={18} />
+                  )}
+                  {activity.type === 'sending' && (
+                    <Send className="text-blue-600" size={18} />
+                  )}
+                  {activity.type === 'error' && (
+                    <AlertCircle className="text-red-600" size={18} />
+                  )}
+                  <div>
+                    <p className="font-medium text-sm">{activity.recipient || 'Inconnu'}</p>
+                    <p className="text-xs text-gray-500">
+                      {activity.category || 'Général'} • {new Date(activity.time).toLocaleTimeString('fr-FR')}
+                    </p>
+                    {activity.error && (
+                      <p className="text-xs text-red-600 mt-1">{activity.error}</p>
+                    )}
+                  </div>
+                </div>
+                <span className={`text-xs px-2 py-1 rounded-full ${
+                  activity.status === 'success' ? 'bg-green-100 text-green-800' :
+                  activity.status === 'failed' ? 'bg-red-100 text-red-800' :
+                  'bg-gray-100 text-gray-800'
+                }`}>
+                  {activity.status === 'success' ? 'Succès' : 
+                   activity.status === 'failed' ? 'Échec' : activity.status}
+                </span>
+              </div>
+            ))
+          ) : (
+            <div className="text-center py-8 text-gray-500">
+              <Activity size={40} className="mx-auto mb-2 opacity-50" />
+              <p>Aucune activité récente</p>
+            </div>
+          )}
+        </div>
+      </Card>
+
+      {/* Performance Metrics */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <Card className="bg-gray-50">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-indigo-100 rounded-lg">
+              <Zap size={20} className="text-indigo-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-600">Temps moyen de génération</p>
+              <p className="text-2xl font-bold">{safeStats.performance.avg_generation_time || 0}s</p>
+            </div>
+          </div>
+        </Card>
+        
+        <Card className="bg-gray-50">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-green-100 rounded-lg">
+              <Send size={20} className="text-green-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-600">Temps moyen d'envoi</p>
+              <p className="text-2xl font-bold">{safeStats.performance.avg_sending_time || 0}s</p>
+            </div>
+          </div>
+        </Card>
+        
+        <Card className="bg-gray-50">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-purple-100 rounded-lg">
+              <TrendingUp size={20} className="text-purple-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-600">Heure de pointe</p>
+              <p className="text-2xl font-bold">
+                {safeStats.performance.peak_hours?.[0]?.hour || '8'}:00
+              </p>
             </div>
           </div>
         </Card>

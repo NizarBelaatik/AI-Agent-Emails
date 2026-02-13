@@ -1,31 +1,37 @@
+# serializers.py
 from rest_framework import serializers
 from data_importer.models import Recipient
-from .models import  EmailTemplate, GeneratedEmail
+from .models import  EmailTemplate, GeneratedEmail, EmailGenerationTask
 
 
 class RecipientForGenerationSerializer(serializers.ModelSerializer):
     has_generated_email = serializers.SerializerMethodField()
-
+    
     class Meta:
         model = Recipient
         fields = [
-            'id', 'name', 'complete_name', 'email', 'company_name', 'city',
-            'x_activitec', 'x_forme_juridique', 'x_ice', 'has_generated_email'
+            'id', 'name', 'complete_name', 'email', 'city', 
+            'x_activitec', 'company_name', 'has_generated_email'
         ]
-
+    
     def get_has_generated_email(self, obj):
-        category_id = self.context.get('category_id')
-        if not category_id:
-            return False
-        return GeneratedEmail.objects.filter(recipient=obj, category_id=category_id).exists()
+        return hasattr(obj, 'generated_emails') and obj.generated_emails.exists()
 
 
 
 
 class EmailTemplateSerializer(serializers.ModelSerializer):
-    category_name = serializers.CharField(source='category.name', read_only=True)
-
     class Meta:
         model = EmailTemplate
-        fields = ['id', 'category', 'category_name', 'subject_template',
-                  'body_template', 'is_generated', 'generated_at', 'model_used']
+        fields = '__all__'
+
+
+class EmailGenerationTaskSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EmailGenerationTask
+        fields = [
+            'task_id', 'recipient_ids', 'selected_category', 
+            'total_recipients', 'total_categories', 'current_category',
+            'status', 'progress_info', 'result', 'error_message',
+            'created_at', 'started_at', 'completed_at', 'progress_percentage'
+        ]
