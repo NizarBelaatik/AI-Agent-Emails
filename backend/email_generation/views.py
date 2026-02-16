@@ -169,11 +169,24 @@ class GenerateEmailsView(APIView):
                 queue=queue
             )
             
-            # IMPORTANT: Mark as READY for sending
-            GeneratedEmail.objects.filter(
-                recipient_id__in=recipient_ids,
-                status='generated'  # only freshly generated ones
-            ).update(status='ready')
+            # FIX: Update status to 'ready' for ALL successfully generated emails
+            # First, mark all emails in this batch as 'generated' if they were successful
+            generated_count = result.get('generated', 0)
+            
+            if generated_count > 0:
+                # Get the emails that were just generated
+                generated_emails = GeneratedEmail.objects.filter(
+                    recipient_id__in=recipient_ids,
+                    status__in=['generating', 'pending_generation', 'generated']
+                )
+                
+                # Update their status to 'ready' for sending
+                updated_count = generated_emails.update(
+                    status='ready',
+                    updated_at=timezone.now()
+                )
+                
+                print(f"[TASK:{task_id}] Marked {updated_count} emails as READY for sending")
             
             # Update task with success
             task.status = 'SUCCESS'
@@ -192,6 +205,8 @@ class GenerateEmailsView(APIView):
             
         except Exception as e:
             print(f"[TASK:{task_id}] Error: {e}")
+            import traceback
+            traceback.print_exc()
             try:
                 task = EmailGenerationTask.objects.get(task_id=task_id)
                 task.status = 'FAILURE'
@@ -205,8 +220,7 @@ class GenerateEmailsView(APIView):
                     task.queue.save()
             except:
                 pass
-
-            
+          
 # ============================================================
 # TASK STATUS
 # ============================================================

@@ -115,13 +115,47 @@ const EmailGeneration = () => {
     try {
       const params = {
         page_size: 100,
-        category: categoryFilter || undefined
+        category: categoryFilter || undefined,
+        status: 'ready' // Add this to specifically fetch ready emails
       };
       const response = await emailGenerationAPI.getEmailStatus(null, params);
-      setGeneratedEmails(response.results || []);
+      
+      // Map the API response to match what the frontend expects
+      const mappedEmails = (response.results || []).map(email => ({
+        id: email.id,
+        recipient_id: email.recipient?.id,
+        recipient_name: email.recipient_name || email.recipient?.name || 'Inconnu',
+        recipient_email: email.recipient_email || email.recipient?.email || '',
+        subject: email.subject || '(Sans sujet)',
+        category: email.category_name || email.category || 'Général',
+        status: email.status,
+        status_display: email.status_display || this.getStatusDisplayFrench(email.status),
+        generated_at: email.generated_at,
+        sent_at: email.sent_at,
+        error_message: email.error_message,
+        // Add any other fields you need
+      }));
+      
+      setGeneratedEmails(mappedEmails);
     } catch (err) {
       console.error('Failed to fetch generated emails:', err);
     }
+  };
+
+  // Helper function to get French status display
+  const getStatusDisplayFrench = (status) => {
+    const statusMap = {
+      'pending_generation': 'En attente',
+      'generating': 'Génération...',
+      'generated': 'Généré',
+      'ready': 'Prêt à envoyer',
+      'sending': 'Envoi...',
+      'sent': 'Envoyé',
+      'failed_generation': 'Échec',
+      'failed_sending': 'Échec envoi',
+      'cancelled': 'Annulé',
+    };
+    return statusMap[status] || status;
   };
 
   const fetchPendingEmails = async () => {
@@ -737,7 +771,6 @@ const EmailGeneration = () => {
         )}
 
         {activeTab === 'generated' && (
-          // GENERATED EMAILS TABLE
           <div className="p-6">
             <h3 className="text-lg font-semibold mb-4">Emails générés</h3>
             {generatedEmails.length === 0 ? (
@@ -749,20 +782,39 @@ const EmailGeneration = () => {
               <div className="space-y-3">
                 {generatedEmails.map((email) => {
                   const isExpanded = expandedEmailId === email.id;
+                  // Determine status display
+                  const statusDisplay = email.status_display || 
+                    (email.status === 'ready' ? 'Prêt à envoyer' : 
+                    email.status === 'generated' ? 'Généré' : 
+                    email.status || 'Inconnu');
+                  
+                  // Determine background color based on status
+                  const bgColor = email.status === 'ready' ? 'bg-green-50' : 
+                                email.status === 'generated' ? 'bg-blue-50' : 
+                                'bg-gray-50';
+                  
                   return (
                     <div key={email.id} className="border rounded-lg overflow-hidden">
-                      <div className="flex items-center justify-between p-4 bg-green-50 hover:bg-green-100 transition-colors">
+                      <div className={`flex items-center justify-between p-4 ${bgColor} hover:bg-opacity-80 transition-colors`}>
                         <div className="flex items-center gap-4 flex-1">
-                          <CheckCircle2 className="h-5 w-5 text-green-600 flex-shrink-0" />
+                          {email.status === 'ready' ? (
+                            <CheckCircle2 className="h-5 w-5 text-green-600 flex-shrink-0" />
+                          ) : (
+                            <Mail className="h-5 w-5 text-blue-600 flex-shrink-0" />
+                          )}
                           <div className="flex-1">
-                            <p className="font-medium">{email.recipient_name}</p>
+                            <p className="font-medium">{email.recipient_name || email.recipient?.name}</p>
                             <p className="text-sm text-gray-600 line-clamp-1">{email.subject}</p>
                           </div>
                         </div>
                         <div className="flex items-center gap-4">
                           <span className="text-sm text-gray-600 hidden md:inline">{email.category}</span>
-                          <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full">
-                            {email.status_display || 'Généré'}
+                          <span className={`text-xs px-2 py-1 rounded-full ${
+                            email.status === 'ready' ? 'bg-green-100 text-green-800' :
+                            email.status === 'generated' ? 'bg-blue-100 text-blue-800' :
+                            'bg-gray-100 text-gray-800'
+                          }`}>
+                            {statusDisplay}
                           </span>
                           <Button
                             variant="ghost"

@@ -277,5 +277,5 @@ TURBOSMTP_CONSUMER_SECRET = "mExOHN6jGvVMPoYpCd0a"
 TURBOSMTP_WEBHOOK_SECRET = "https://bmm.ma/webhook/turbosmtp/"
 
 # Default sender
-DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'contact@bmm.ma')
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'hasna.bouraouda@arborismanagement.com')
 DEFAULT_FROM_NAME = os.environ.get('DEFAULT_FROM_NAME', 'BMM')
