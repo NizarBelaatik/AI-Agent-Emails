@@ -25,8 +25,8 @@ HOST_NAME_ID = '192.168.1.39'
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-0ngyz$z6t-@#2tsivye_r9gw(_#6fi#9yhvgy1yatj2m*w_fs*'
-#SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-development-key')
+#SECRET_KEY = 
+SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-development-key')
 
 
 # SECURITY WARNING: don't run with debug turned on in production!
@@ -268,14 +268,15 @@ CELERY_TASK_SOFT_TIME_LIMIT = 25 * 60
 ##############################################
 ##############################################
 # TurboSMTP Settings
-#TURBOSMTP_CONSUMER_KEY = os.environ.get('TURBOSMTP_CONSUMER_KEY', '')
-#TURBOSMTP_CONSUMER_SECRET = os.environ.get('TURBOSMTP_CONSUMER_SECRET', '')
-#TURBOSMTP_WEBHOOK_SECRET = os.environ.get('TURBOSMTP_WEBHOOK_SECRET', '')
+TURBOSMTP_CONSUMER_KEY = os.environ.get('TURBOSMTP_CONSUMER_KEY', '')
+TURBOSMTP_CONSUMER_SECRET = os.environ.get('TURBOSMTP_CONSUMER_SECRET', '')
+TURBOSMTP_WEBHOOK_SECRET = os.environ.get('TURBOSMTP_WEBHOOK_SECRET', '')
 
-TURBOSMTP_CONSUMER_KEY = "7a2dd23c2a93aea200e9"
-TURBOSMTP_CONSUMER_SECRET = "mExOHN6jGvVMPoYpCd0a"
-TURBOSMTP_WEBHOOK_SECRET = "https://bmm.ma/webhook/turbosmtp/"
+
+
+
+#TURBOSMTP_WEBHOOK_SECRET = "https://bmm.ma/webhook/turbosmtp/"
 
 # Default sender
-DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'hasna.bouraouda@arborismanagement.com')
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'contact@bmm.ma')
 DEFAULT_FROM_NAME = os.environ.get('DEFAULT_FROM_NAME', 'BMM')
