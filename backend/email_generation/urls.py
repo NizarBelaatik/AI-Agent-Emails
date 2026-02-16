@@ -2,6 +2,7 @@
 from django.urls import path
 from .views import (
     RecipientListView,
+    CategoryListView,
     #EmailCategoryListView,
     #GenerateTemplateView,
     TemplateListView,
@@ -17,7 +18,7 @@ from .views import (
 
 urlpatterns = [
     path('recipients/', RecipientListView.as_view(), name='recipient-list'),
-    #path('categories/', EmailCategoryListView.as_view(), name='category-list'),
+    path('categories/', CategoryListView.as_view(), name='category-list'),
     path('templates/', TemplateListView.as_view(), name='template-list'),
     #path('templates/generate/<int:category_id>/', GenerateTemplateView.as_view(), name='generate-template'),
     path('emails/generate/', GenerateEmailsView.as_view(), name='generate-emails'),

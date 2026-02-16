@@ -241,6 +241,108 @@ export const emailGenerationAPI = {
       throw error;
     }
   },
+
+
+
+  
 };
+
+
+export const emailSenderAPI = {
+  // List ready emails (paginated, filterable)
+  getReadyEmails: async (params = {}) => {
+    try {
+      const response = await api.get('/email-sender/emails/ready/', { params });
+      return response.data;
+    } catch (error) {
+      console.error('Error fetching ready emails:', error);
+      return { results: [], total: 0, page: 1, page_size: 50 };
+    }
+  },
+
+  // Start batch sending
+  sendBatch: async (payload) => {
+    try {
+      const response = await api.post('/email-sender/send-batch/', payload);
+      return response.data;
+    } catch (error) {
+      console.error('Error starting batch:', error);
+      throw error;
+    }
+  },
+
+  // Get live status of a batch
+  getBatchStatus: async (batchId) => {
+    try {
+      const response = await api.get(`/email-sender/batches/${batchId}/`);
+      return response.data;
+    } catch (error) {
+      console.error('Error getting batch status:', error);
+      throw error;
+    }
+  },
+
+  // List recent batches
+  getBatches: async (params = {}) => {
+    try {
+      const response = await api.get('/email-sender/batches/', { params });
+      return response.data;
+    } catch (error) {
+      console.error('Error fetching batches:', error);
+      return [];
+    }
+  },
+
+  // Cancel batch
+  cancelBatch: async (batchId) => {
+    try {
+      const response = await api.post(`/email-sender/batches/${batchId}/cancel/`);
+      return response.data;
+    } catch (error) {
+      console.error('Error canceling batch:', error);
+      throw error;
+    }
+  },
+
+  // Retry failed emails in batch
+  retryFailed: async (batchId) => {
+    try {
+      const response = await api.post(`/email-sender/batches/${batchId}/retry-failed/`);
+      return response.data;
+    } catch (error) {
+      console.error('Error retrying failed emails:', error);
+      throw error;
+    }
+  },
+
+  // Sending dashboard stats
+  getSendingStats: async () => {
+    try {
+      const response = await api.get('/email-sender/dashboard/stats/');
+      return response.data;
+    } catch (error) {
+      console.error('Error fetching sending stats:', error);
+      return {
+        ready: 0,
+        sending: 0,
+        sent_today: 0,
+        failed_today: 0,
+        active_batches: 0,
+      };
+    }
+  },
+
+  // Single email sending status
+  getEmailStatus: async (emailId) => {
+    try {
+      const response = await api.get(`/email-sender/emails/${emailId}/status/`);
+      return response.data;
+    } catch (error) {
+      console.error('Error fetching email status:', error);
+      throw error;
+    }
+  },
+};
+
 
 export default api;

@@ -149,11 +149,9 @@ class GenerateEmailsView(APIView):
     def _run_generation_task(self, task_id, recipient_ids, selected_category):
         """Run generation task in background thread"""
         try:
-            # Get task and queue
             task = EmailGenerationTask.objects.get(task_id=task_id)
             queue = task.queue
             
-            # Update status
             task.status = 'PROGRESS'
             task.started_at = timezone.now()
             task.save()
@@ -171,6 +169,12 @@ class GenerateEmailsView(APIView):
                 queue=queue
             )
             
+            # IMPORTANT: Mark as READY for sending
+            GeneratedEmail.objects.filter(
+                recipient_id__in=recipient_ids,
+                status='generated'  # only freshly generated ones
+            ).update(status='ready')
+            
             # Update task with success
             task.status = 'SUCCESS'
             task.result = result
@@ -184,11 +188,10 @@ class GenerateEmailsView(APIView):
                 queue.failed_emails = len(result.get('errors', {}))
                 queue.save()
             
-            print(f"[TASK:{task_id}] Completed successfully")
+            print(f"[TASK:{task_id}] Completed successfully - {result.get('generated', 0)} emails marked READY")
             
         except Exception as e:
             print(f"[TASK:{task_id}] Error: {e}")
-            
             try:
                 task = EmailGenerationTask.objects.get(task_id=task_id)
                 task.status = 'FAILURE'
@@ -202,7 +205,6 @@ class GenerateEmailsView(APIView):
                     task.queue.save()
             except:
                 pass
-
 
             
 # ============================================================
@@ -296,8 +298,18 @@ class CancelTaskView(APIView):
             
             
             
-            
-            
+from .models import EmailCategory
+from .serializers import EmailCategorySerializer
+    
+class CategoryListView(APIView):
+    """
+    GET /api/email-generation/categories/
+    List all email categories
+    """
+    def get(self, request):
+        categories = EmailCategory.objects.all().order_by('name')
+        serializer = EmailCategorySerializer(categories, many=True)
+        return Response(serializer.data)
             
             
             
@@ -752,3 +764,4 @@ class CancelTaskView(APIView):
                 {"success": False, "error": "Tâche introuvable"},
                 status=404
             )
+            

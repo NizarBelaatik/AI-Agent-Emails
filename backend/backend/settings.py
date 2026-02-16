@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     'data_importer',
     'core',     
     'email_generation',
+    'email_sender',
 ]
 
 MIDDLEWARE = [
@@ -200,9 +201,10 @@ AWS_SES_CONFIG = {
 #############################
 
 # LLM Configuration
-OLLAMA_API_URL = os.getenv('OLLAMA_API_URL', 'http://localhost:11434')
-OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama2')
-OLLAMA_MODEL_NAME = os.getenv('OLLAMA_MODEL', 'llama2')
+OLLAMA_API_URL = os.getenv('OLLAMA_API_URL', f'http://{HOST_NAME_ID}:11434')
+#OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama3.1:8b-instruct-q4_K_M')
+OLLAMA_MODEL = "llama3.2"#"mistral:7b-instruct-q4_K_M"
+OLLAMA_MODEL_NAME = os.getenv('OLLAMA_MODEL', OLLAMA_MODEL)
 #OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama3.2:latest')
 
 # OpenAI Configuration (optional)
@@ -261,3 +263,19 @@ CELERY_TIMEZONE = 'UTC'
 # Task timeouts
 CELERY_TASK_TIME_LIMIT = 30 * 60
 CELERY_TASK_SOFT_TIME_LIMIT = 25 * 60
+
+
+##############################################
+##############################################
+# TurboSMTP Settings
+#TURBOSMTP_CONSUMER_KEY = os.environ.get('TURBOSMTP_CONSUMER_KEY', '')
+#TURBOSMTP_CONSUMER_SECRET = os.environ.get('TURBOSMTP_CONSUMER_SECRET', '')
+#TURBOSMTP_WEBHOOK_SECRET = os.environ.get('TURBOSMTP_WEBHOOK_SECRET', '')
+
+TURBOSMTP_CONSUMER_KEY = "7a2dd23c2a93aea200e9"
+TURBOSMTP_CONSUMER_SECRET = "mExOHN6jGvVMPoYpCd0a"
+TURBOSMTP_WEBHOOK_SECRET = "https://bmm.ma/webhook/turbosmtp/"
+
+# Default sender
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'contact@bmm.ma')
+DEFAULT_FROM_NAME = os.environ.get('DEFAULT_FROM_NAME', 'BMM')

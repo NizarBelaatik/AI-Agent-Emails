@@ -35,3 +35,15 @@ class EmailGenerationTaskSerializer(serializers.ModelSerializer):
             'status', 'progress_info', 'result', 'error_message',
             'created_at', 'started_at', 'completed_at', 'progress_percentage'
         ]
+        
+        
+# email_generation/serializers.py
+from rest_framework import serializers
+from .models import EmailCategory, GeneratedEmail, EmailTemplate  # add others as needed
+
+
+class EmailCategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EmailCategory
+        fields = ['id', 'name', 'description', 'email_count', 'last_generated_at']
+        read_only_fields = ['email_count', 'last_generated_at']
