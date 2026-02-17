@@ -7,6 +7,7 @@ from .views import (
     #GenerateTemplateView,
     TemplateListView,
     GenerateEmailsView,
+    
     TaskStatusView,
     TaskListView,
     CancelTaskView,
@@ -14,6 +15,9 @@ from .views import (
     GenerationQueueView,
     SendingQueueView,
     EmailStatusView,
+    MarkEmailsReadyView,
+    
+    
 )
 
 urlpatterns = [
@@ -22,6 +26,8 @@ urlpatterns = [
     path('templates/', TemplateListView.as_view(), name='template-list'),
     #path('templates/generate/<int:category_id>/', GenerateTemplateView.as_view(), name='generate-template'),
     path('emails/generate/', GenerateEmailsView.as_view(), name='generate-emails'),
+     
+    
     path('tasks/<str:task_id>/', TaskStatusView.as_view(), name='task-status'),
     path('tasks/', TaskListView.as_view(), name='task-list'),
     path('tasks/<str:task_id>/cancel/', CancelTaskView.as_view(), name='cancel-task'),
@@ -32,4 +38,8 @@ urlpatterns = [
     path('queue/sending/', SendingQueueView.as_view(), name='sending-queue'),
     path('emails/status/', EmailStatusView.as_view(), name='email-status'),
     path('emails/<int:email_id>/status/', EmailStatusView.as_view(), name='email-detail-status'),
+
+    path('emails/', EmailStatusView.as_view(), name='email-status-list'),   
+    path('emails/<int:email_id>/', EmailStatusView.as_view(), name='email-status-detail'),
+    path('emails/mark-ready/', MarkEmailsReadyView.as_view(), name='mark-emails-ready'),
 ]

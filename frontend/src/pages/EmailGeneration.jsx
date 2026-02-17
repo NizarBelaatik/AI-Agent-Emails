@@ -19,6 +19,7 @@ const EmailGeneration = () => {
   const [generatedEmails, setGeneratedEmails] = useState([]);
   const [pendingEmails, setPendingEmails] = useState([]);
   const [selected, setSelected] = useState(new Set());
+  const [selectedForSending, setSelectedForSending] = useState(new Set()); // For marking emails as ready
   const [search, setSearch] = useState('');
   const [categories, setCategories] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState('auto');
@@ -69,7 +70,7 @@ const EmailGeneration = () => {
       clearInterval(refreshInterval);
       Object.values(pollIntervalsRef.current).forEach(clearInterval);
     };
-  }, [pagination.page, search, categoryFilter]); // Add categoryFilter to dependencies
+  }, [pagination.page, search, categoryFilter]);
 
   const fetchRecipients = async () => {
     setLoading(true);
@@ -116,11 +117,11 @@ const EmailGeneration = () => {
       const params = {
         page_size: 100,
         category: categoryFilter || undefined,
-        status: 'ready' // Add this to specifically fetch ready emails
+        status: 'generated' // ONLY show emails with 'generated' status
       };
       const response = await emailGenerationAPI.getEmailStatus(null, params);
       
-      // Map the API response to match what the frontend expects
+      // Map the API response
       const mappedEmails = (response.results || []).map(email => ({
         id: email.id,
         recipient_id: email.recipient?.id,
@@ -129,11 +130,10 @@ const EmailGeneration = () => {
         subject: email.subject || '(Sans sujet)',
         category: email.category_name || email.category || 'Général',
         status: email.status,
-        status_display: email.status_display || this.getStatusDisplayFrench(email.status),
+        status_display: email.status_display || getStatusDisplayFrench(email.status),
         generated_at: email.generated_at,
         sent_at: email.sent_at,
         error_message: email.error_message,
-        // Add any other fields you need
       }));
       
       setGeneratedEmails(mappedEmails);
@@ -309,29 +309,30 @@ const EmailGeneration = () => {
     }
   };
 
-  const handleRegenerate = async (recipientId, category) => {
-    if (!window.confirm('Voulez-vous régénérer cet email ?')) return;
-    
-    setGenerating(true);
+  const handleMarkAsReady = async () => {
+    if (selectedForSending.size === 0) {
+      alert('Veuillez sélectionner au moins un email à marquer comme prêt');
+      return;
+    }
+
+    if (!window.confirm(`Marquer ${selectedForSending.size} email(s) comme prêts à envoyer ?`)) return;
+
     try {
-      const payload = {
-        recipient_ids: [recipientId],
-        category_name: category,
-        force: true
-      };
+      const response = await emailGenerationAPI.markEmailsReady({
+        email_ids: Array.from(selectedForSending)
+      });
       
-      const response = await emailGenerationAPI.generateEmails(payload);
-      
-      if (response.task_id) {
-        setSuccess(`✅ Régénération démarrée`);
-        startPolling(response.task_id);
+      if (response.success) {
+        setSuccess(`${response.updated_count} emails marqués comme prêts à envoyer`);
+        setSelectedForSending(new Set());
+        fetchGeneratedEmails(); // Refresh the list
       }
     } catch (err) {
-      setError('Erreur lors de la régénération');
-    } finally {
-      setGenerating(false);
+      setError('Erreur lors du marquage des emails');
     }
   };
+
+ 
 
   const cancelTask = async (taskId) => {
     if (!window.confirm('Voulez-vous annuler cette génération ?')) return;
@@ -361,6 +362,21 @@ const EmailGeneration = () => {
     if (next.has(id)) next.delete(id);
     else next.add(id);
     setSelected(next);
+  };
+
+  const toggleAllGenerated = () => {
+    if (selectedForSending.size === generatedEmails.length) {
+      setSelectedForSending(new Set());
+    } else {
+      setSelectedForSending(new Set(generatedEmails.map(e => e.id)));
+    }
+  };
+
+  const toggleOneGenerated = (id) => {
+    const next = new Set(selectedForSending);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelectedForSending(next);
   };
 
   const changePage = (delta) => {
@@ -539,6 +555,17 @@ const EmailGeneration = () => {
                   </Button>
                 </>
               )}
+              {activeTab === 'generated' && generatedEmails.length > 0 && (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={handleMarkAsReady}
+                  disabled={selectedForSending.size === 0}
+                >
+                  <Send size={16} className="mr-2" />
+                  Marquer comme prêts à envoyer ({selectedForSending.size})
+                </Button>
+              )}
               <Button variant="outline" onClick={fetchRecipients} disabled={loading}>
                 <RefreshCw size={16} className="mr-2" />
                 Actualiser
@@ -687,7 +714,6 @@ const EmailGeneration = () => {
                                       <FileText size={18} />
                                     </button>
                                     <button
-                                      onClick={() => handleRegenerate(r.id, r.x_activitec)}
                                       className="text-amber-600 hover:text-amber-900 p-2 rounded-full hover:bg-amber-50"
                                       title="Régénérer"
                                     >
@@ -772,36 +798,54 @@ const EmailGeneration = () => {
 
         {activeTab === 'generated' && (
           <div className="p-6">
-            <h3 className="text-lg font-semibold mb-4">Emails générés</h3>
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold">Emails générés (statut: généré)</h3>
+              {generatedEmails.length > 0 && (
+                <div className="flex items-center gap-4">
+                  <div className="text-sm bg-gray-100 px-3 py-2 rounded-lg">
+                    <span className="text-gray-600">Sélectionnés pour envoi :</span>
+                    <strong className="ml-1 text-indigo-700">{selectedForSending.size}</strong>
+                  </div>
+                </div>
+              )}
+            </div>
+            
             {generatedEmails.length === 0 ? (
               <div className="text-center py-12 text-gray-500">
                 <Mail size={48} className="mx-auto mb-4 opacity-50" />
                 <p>Aucun email généré</p>
+                <p className="text-sm mt-2">Les emails avec le statut "généré" apparaîtront ici</p>
               </div>
             ) : (
               <div className="space-y-3">
+                {/* Header with Select All */}
+                <div className="flex items-center px-4 py-2 bg-gray-50 rounded-lg mb-2">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={selectedForSending.size === generatedEmails.length}
+                      onChange={toggleAllGenerated}
+                      className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span className="text-sm font-medium text-gray-700">Tout sélectionner</span>
+                  </div>
+                </div>
+
                 {generatedEmails.map((email) => {
                   const isExpanded = expandedEmailId === email.id;
-                  // Determine status display
-                  const statusDisplay = email.status_display || 
-                    (email.status === 'ready' ? 'Prêt à envoyer' : 
-                    email.status === 'generated' ? 'Généré' : 
-                    email.status || 'Inconnu');
-                  
-                  // Determine background color based on status
-                  const bgColor = email.status === 'ready' ? 'bg-green-50' : 
-                                email.status === 'generated' ? 'bg-blue-50' : 
-                                'bg-gray-50';
+                  const isSelected = selectedForSending.has(email.id);
                   
                   return (
                     <div key={email.id} className="border rounded-lg overflow-hidden">
-                      <div className={`flex items-center justify-between p-4 ${bgColor} hover:bg-opacity-80 transition-colors`}>
+                      <div className={`flex items-center justify-between p-4 bg-blue-50 hover:bg-opacity-80 transition-colors`}>
                         <div className="flex items-center gap-4 flex-1">
-                          {email.status === 'ready' ? (
-                            <CheckCircle2 className="h-5 w-5 text-green-600 flex-shrink-0" />
-                          ) : (
-                            <Mail className="h-5 w-5 text-blue-600 flex-shrink-0" />
-                          )}
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleOneGenerated(email.id)}
+                            className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                          />
+                          <Mail className="h-5 w-5 text-blue-600 flex-shrink-0" />
                           <div className="flex-1">
                             <p className="font-medium">{email.recipient_name || email.recipient?.name}</p>
                             <p className="text-sm text-gray-600 line-clamp-1">{email.subject}</p>
@@ -809,12 +853,8 @@ const EmailGeneration = () => {
                         </div>
                         <div className="flex items-center gap-4">
                           <span className="text-sm text-gray-600 hidden md:inline">{email.category}</span>
-                          <span className={`text-xs px-2 py-1 rounded-full ${
-                            email.status === 'ready' ? 'bg-green-100 text-green-800' :
-                            email.status === 'generated' ? 'bg-blue-100 text-blue-800' :
-                            'bg-gray-100 text-gray-800'
-                          }`}>
-                            {statusDisplay}
+                          <span className="text-xs px-2 py-1 rounded-full bg-blue-100 text-blue-800">
+                            {email.status_display || 'Généré'}
                           </span>
                           <Button
                             variant="ghost"
@@ -861,14 +901,7 @@ const EmailGeneration = () => {
                               <Eye size={16} className="mr-1" />
                               Voir le contenu complet
                             </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleRegenerate(email.recipient_id, email.category)}
-                            >
-                              <RotateCw size={16} className="mr-1" />
-                              Régénérer
-                            </Button>
+
                           </div>
                         </div>
                       )}
@@ -935,10 +968,6 @@ const EmailGeneration = () => {
             <div className="px-6 py-4 border-t bg-gray-50 flex justify-end gap-2">
               <Button variant="outline" onClick={() => setShowEmailModal(false)}>
                 Fermer
-              </Button>
-              <Button variant="primary">
-                <Send size={16} className="mr-2" />
-                Envoyer
               </Button>
             </div>
           </div>

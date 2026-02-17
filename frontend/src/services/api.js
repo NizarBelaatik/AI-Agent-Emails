@@ -214,6 +214,18 @@ export const emailGenerationAPI = {
       throw error;
     }
   },
+
+  regenerateEmail: async (emailId, category) => {
+    try {
+      const response = await api.post(`/email-generation/emails/${emailId}/regenerate/`, {
+        category_name: category
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Error in regenerateEmail:', error);
+      throw error;
+    }
+  },
   
   getTaskStatus: async (taskId) => {
     try {
@@ -242,6 +254,32 @@ export const emailGenerationAPI = {
     }
   },
 
+
+   getEmailStatus: async (emailId = null, params = {}) => {
+    try {
+      let url = '/email-generation/emails/';
+      if (emailId) {
+        url = `/email-generation/emails/${emailId}/`;
+      }
+      
+      const response = await api.get(url, { params });
+      return response.data;
+    } catch (error) {
+      console.error('Error in getEmailStatus:', error);
+      throw error;
+    }
+  },
+  
+  // Mark emails as ready for sending
+  markEmailsReady: async (data) => {
+    try {
+      const response = await api.post('/email-generation/emails/mark-ready/', data);
+      return response.data;
+    } catch (error) {
+      console.error('Error in markEmailsReady:', error);
+      throw error;
+    }
+  },
 
 
   

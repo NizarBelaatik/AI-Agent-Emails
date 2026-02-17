@@ -26,6 +26,10 @@ from .services import (
 )
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 # ============================================================
 # PAGINATION
@@ -146,6 +150,7 @@ class GenerateEmailsView(APIView):
             "recipient_count": len(recipient_ids)
         })
     
+    
     def _run_generation_task(self, task_id, recipient_ids, selected_category):
         """Run generation task in background thread"""
         try:
@@ -169,39 +174,37 @@ class GenerateEmailsView(APIView):
                 queue=queue
             )
             
-            # FIX: Update status to 'ready' for ALL successfully generated emails
-            # First, mark all emails in this batch as 'generated' if they were successful
+            # FIX: Set to 'generated' status, NOT 'ready'
             generated_count = result.get('generated', 0)
             
             if generated_count > 0:
                 # Get the emails that were just generated
                 generated_emails = GeneratedEmail.objects.filter(
                     recipient_id__in=recipient_ids,
-                    status__in=['generating', 'pending_generation', 'generated']
+                    status__in=['generating', 'pending_generation']
                 )
                 
-                # Update their status to 'ready' for sending
+                # Set to 'generated' status - these will appear in the generation page
                 updated_count = generated_emails.update(
-                    status='ready',
+                    status='generated',  # Keep as 'generated'
                     updated_at=timezone.now()
                 )
                 
-                print(f"[TASK:{task_id}] Marked {updated_count} emails as READY for sending")
-            
-            # Update task with success
-            task.status = 'SUCCESS'
-            task.result = result
-            task.completed_at = timezone.now()
-            task.save()
-            
-            if queue:
-                queue.status = 'completed'
-                queue.completed_at = timezone.now()
-                queue.processed_emails = result.get('generated', 0)
-                queue.failed_emails = len(result.get('errors', {}))
-                queue.save()
-            
-            print(f"[TASK:{task_id}] Completed successfully - {result.get('generated', 0)} emails marked READY")
+                print(f"[TASK:{task_id}] Marked {updated_count} emails as GENERATED")
+                # Update task with success
+                task.status = 'SUCCESS'
+                task.result = result
+                task.completed_at = timezone.now()
+                task.save()
+                
+                if queue:
+                    queue.status = 'completed'
+                    queue.completed_at = timezone.now()
+                    queue.processed_emails = result.get('generated', 0)
+                    queue.failed_emails = len(result.get('errors', {}))
+                    queue.save()
+                
+                print(f"[TASK:{task_id}] Completed successfully - {result.get('generated', 0)} emails marked GENERATED")
             
         except Exception as e:
             print(f"[TASK:{task_id}] Error: {e}")
@@ -219,8 +222,41 @@ class GenerateEmailsView(APIView):
                     task.queue.completed_at = timezone.now()
                     task.queue.save()
             except:
-                pass
-          
+                logger.error(f"[TASK:{task_id}] Error: {e}", exc_info=True)
+
+
+
+# ============================================================
+# MarkEmailsReadyView
+# ============================================================
+class MarkEmailsReadyView(APIView):
+    """
+    POST /api/email-generation/emails/mark-ready/
+    Move selected emails from 'generated' to 'ready' status for sending
+    """
+    def post(self, request):
+        email_ids = request.data.get('email_ids', [])
+        
+        if not email_ids:
+            return Response(
+                {"success": False, "error": "Aucun email sélectionné"},
+                status=400
+            )
+        
+        # Only mark emails that are in 'generated' status
+        updated = GeneratedEmail.objects.filter(
+            id__in=email_ids,
+            status='generated'
+        ).update(
+            status='ready',
+            updated_at=timezone.now()
+        )
+        
+        return Response({
+            "success": True,
+            "message": f"{updated} emails marqués comme prêts à envoyer",
+            "updated_count": updated
+        })
 # ============================================================
 # TASK STATUS
 # ============================================================
@@ -452,6 +488,8 @@ class GenerationQueueView(APIView):
             minutes = (seconds % 3600) // 60
             return f"{hours}h {minutes}min"
         
+
+            
 # ============================================================
 # SENDING QUEUE VIEW
 # ============================================================
@@ -545,8 +583,10 @@ class EmailStatusView(APIView):
                 
         except Exception as e:
             print(f"[EMAIL STATUS ERROR] {e}")
+            import traceback
+            traceback.print_exc()
             return Response(
-                {"success": False, "error": str(e)},
+                {"error": str(e)},
                 status=500
             )
     
@@ -557,40 +597,19 @@ class EmailStatusView(APIView):
                 'recipient', 'template'
             ).get(id=email_id)
             
-            # Get queue info if available
-            queue_info = None
-            if email.metadata and 'queue_id' in email.metadata:
-                try:
-                    queue = EmailGenerationQueue.objects.get(id=email.metadata['queue_id'])
-                    queue_info = {
-                        'queue_id': queue.id,
-                        'queue_name': queue.name,
-                        'queue_status': queue.status,
-                    }
-                except EmailGenerationQueue.DoesNotExist:
-                    pass
-            
             return Response({
                 'id': email.id,
                 'recipient': {
                     'id': email.recipient.id if email.recipient else None,
                     'name': email.recipient.name if email.recipient else 'Unknown',
                     'email': email.recipient.email if email.recipient else '',
-                    'company': email.recipient.company_name if email.recipient else '',
                 },
                 'category': email.category_name,
                 'status': email.status,
-                'status_display': self._get_status_display_french(email.status),
                 'subject': email.subject,
-                'body_preview': email.body_html[:200] + '...' if email.body_html else '',
+                'body_html': email.body_html,
                 'generated_at': email.generated_at,
                 'sent_at': email.sent_at,
-                'created_at': email.created_at,
-                'updated_at': email.updated_at,
-                'error': email.error_message,
-                'retry_count': email.retry_count,
-                'queue_info': queue_info,
-                'metadata': email.metadata,
             })
             
         except GeneratedEmail.DoesNotExist:
@@ -604,7 +623,6 @@ class EmailStatusView(APIView):
         # Get filter parameters
         status_filter = request.query_params.get('status')
         category_filter = request.query_params.get('category')
-        date_filter = request.query_params.get('date')
         search = request.query_params.get('search', '')
         
         # Base queryset
@@ -613,10 +631,10 @@ class EmailStatusView(APIView):
         # Apply filters
         if status_filter:
             queryset = queryset.filter(status=status_filter)
+        
         if category_filter:
             queryset = queryset.filter(category_name=category_filter)
-        if date_filter:
-            queryset = queryset.filter(created_at__date=date_filter)
+            
         if search:
             queryset = queryset.filter(
                 Q(recipient__name__icontains=search) |
@@ -633,17 +651,11 @@ class EmailStatusView(APIView):
         total = queryset.count()
         emails = queryset.order_by('-created_at')[start:end]
         
-        # Get status counts for filters
-        status_counts = {}
-        for status in ['pending_generation', 'generating', 'generated', 'ready', 'sending', 'sent', 'failed_generation', 'failed_sending']:
-            status_counts[status] = GeneratedEmail.objects.filter(status=status).count()
-        
         return Response({
             'total': total,
             'page': page,
             'page_size': page_size,
             'total_pages': (total + page_size - 1) // page_size if total > 0 else 0,
-            'status_counts': status_counts,
             'results': [
                 {
                     'id': e.id,
@@ -651,32 +663,12 @@ class EmailStatusView(APIView):
                     'recipient_email': e.recipient.email if e.recipient else '',
                     'category': e.category_name,
                     'status': e.status,
-                    'status_display': self._get_status_display_french(e.status),
-                    'subject': e.subject[:100] if e.subject else '',
+                    'subject': e.subject,
                     'generated_at': e.generated_at,
                     'sent_at': e.sent_at,
-                    'created_at': e.created_at,
-                    'error': e.error_message[:100] if e.error_message else None,
                 } for e in emails
             ]
         })
-    
-    def _get_status_display_french(self, status):
-        """Convert status code to French display text"""
-        status_map = {
-            'pending_generation': 'En attente de génération',
-            'generating': 'Génération en cours',
-            'generated': 'Généré',
-            'ready': 'Prêt à envoyer',
-            'sending': 'Envoi en cours',
-            'sent': 'Envoyé',
-            'failed_generation': 'Échec génération',
-            'failed_sending': 'Échec envoi',
-            'cancelled': 'Annulé',
-        }
-        return status_map.get(status, status)
-
-
 # ============================================================
 # TASK MANAGEMENT VIEWS (If you don't have these)
 # ============================================================
@@ -779,3 +771,38 @@ class CancelTaskView(APIView):
                 status=404
             )
             
+
+class MarkEmailsReadyView(APIView):
+    """
+    POST /api/email-generation/emails/mark-ready/
+    Move selected emails from 'generated' to 'ready' status for sending
+    """
+    def post(self, request):
+        email_ids = request.data.get('email_ids', [])
+        
+        if not email_ids:
+            return Response(
+                {"success": False, "error": "Aucun email sélectionné"},
+                status=400
+            )
+        
+        # Only mark emails that are in 'generated' status
+        updated = GeneratedEmail.objects.filter(
+            id__in=email_ids,
+            status='generated'
+        ).update(
+            status='ready',
+            updated_at=timezone.now()
+        )
+        
+        return Response({
+            "success": True,
+            "message": f"{updated} emails marqués comme prêts à envoyer",
+            "updated_count": updated
+        })            
+
+
+
+            
+
+
