@@ -133,6 +133,15 @@ DATABASES_2 =  {
         'PASSWORD': os.getenv('SOURCE_DB_PASSWORD', 'readonly_pass'),
         'HOST': os.getenv('SOURCE_DB_HOST', 'localhost'),
         'PORT': os.getenv('SOURCE_DB_PORT', '5432'),
+    },
+    
+        'source_db': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.getenv('SOURCE_DB_NAME', 'odoo_test_full'),
+        'USER': os.getenv('SOURCE_DB_USER', 'auto_mail_user'),
+        'PASSWORD': os.getenv('SOURCE_DB_PASSWORD', 'odoo'),
+        'HOST': os.getenv('SOURCE_DB_HOST', '192.168.1.39'),
+        'PORT': os.getenv('SOURCE_DB_PORT', '5432'),
     }
 }
 
@@ -267,11 +276,12 @@ CELERY_TASK_SOFT_TIME_LIMIT = 25 * 60
 
 ##############################################
 ##############################################
-# TurboSMTP Settings
 TURBOSMTP_CONSUMER_KEY = os.environ.get('TURBOSMTP_CONSUMER_KEY', '')
 TURBOSMTP_CONSUMER_SECRET = os.environ.get('TURBOSMTP_CONSUMER_SECRET', '')
 TURBOSMTP_WEBHOOK_SECRET = os.environ.get('TURBOSMTP_WEBHOOK_SECRET', '')
 
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', '')
+DEFAULT_FROM_NAME = os.environ.get('DEFAULT_FROM_NAME', 'BMM')
 
 
 

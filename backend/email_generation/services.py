@@ -39,7 +39,7 @@ def get_or_generate_template(category_name: str, force=False):
     
     print(f"[TEMPLATE] No template found for '{category_name}', generating...")
 
-    prompt = f"""
+    prompt2 = f"""
 Tu es un expert copywriter B2B au Maroc.
 
 Catégorie d'activité : {category_name}
@@ -62,6 +62,42 @@ Réponds UNIQUEMENT en JSON valide :
 }}
 """
 
+
+    prompt = f"""
+Tu es un expert en copywriting B2B sur le marché marocain, travaillant pour BMM (Business Meeting Maroc).
+Ta mission est de rédiger un email de prospection (cold email) court et percutant.
+
+**L'Offre de BMM :**
+BMM est le spécialiste de la prospection et de la génération d'opportunités d'affaires. Nous aidons les entreprises à remplacer le hasard commercial par une machine à revenus prédictible en leur fournissant des rendez-vous B2B ultra-qualifiés.
+
+**Contexte de la cible :**
+Tu t'adresses à un décideur dans le secteur : {category_name}.
+Activité spécifique ou sous-secteur : {{ recipient.x_activitec }}
+Ville : {{ recipient.city }}
+
+**Structure obligatoire de l'email (Méthode BMM) :**
+1. L'accroche : Brise la glace de manière hyper-personnalisée pour son secteur ({category_name}).
+2. Le problème : Soulève le défi de trouver des clients qualifiés ou de stabiliser les revenus dans son domaine. Utilise "vous" et "vos enjeux", JAMAIS "je", "nous" ou "notre" dans cette partie.
+3. La solution : Présente BMM subtilement comme la solution pour automatiser sa prospection et obtenir des rendez-vous sans effort.
+4. Le Call to Action (CTA) "Low Friction" : Propose UNIQUEMENT un échange rapide de 10 à 15 minutes. Ne vends rien d'autre.
+
+**RÈGLES STRICTES DE FORMATAGE :**
+- Ton email doit être chaleureux, direct, et professionnel.
+- Tu DOIS utiliser ces variables exactes, avec des doubles accolades simples : 
+  {{ recipient.name }} (Nom du contact)
+  {{ recipient.company_name }} (Nom de son entreprise)
+  {{ recipient.city }} (Ville)
+  {{ recipient.x_activitec }} (Activité)
+- Le corps de l'email doit être en HTML simple (utilise uniquement <p>, <br>, et <strong>).
+
+Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ou après, et sans blocs de code markdown. Format exact :
+{{
+  "subject": "Le sujet court et intrigant ici",
+  "body": "<p>Bonjour {{ recipient.name }},</p><p>Le contenu ici...</p>"
+}}
+"""
+
+
     print(f"[OLLAMA] Generating template for: '{category_name}'")
 
     try:
@@ -70,7 +106,12 @@ Réponds UNIQUEMENT en JSON valide :
             messages=[{'role': 'user', 'content': prompt}],
             format="json",
         )
-        data = json.loads(response['message']['content'])
+        
+        raw_content = response['message']['content']
+        # Strip markdown formatting if the model disobeys
+        clean_content = raw_content.replace("```json", "").replace("```", "").strip()
+        data = json.loads(clean_content)
+        #data = json.loads(response['message']['content'])
         print(f"[OLLAMA] Successfully generated template for '{category_name}'")
     except Exception as e:
         print(f"[OLLAMA ERROR] {e}")

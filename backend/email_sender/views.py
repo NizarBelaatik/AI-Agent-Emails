@@ -40,7 +40,7 @@ class ReadyEmailsListView(APIView):
     """
     def get(self, request):
         queryset = GeneratedEmail.objects.filter(
-            status__in=['generated', 'ready']
+            status__in=[ 'ready'] # list of status to show in send_email 
         ).select_related('recipient').order_by('-generated_at')
         # Filters
         search = request.query_params.get('search', '').strip()
@@ -300,3 +300,45 @@ class EmailSendingStatusView(APIView):
         
 
 
+
+
+# Add this to your email_sender/views.py
+
+class TestTurboSMTPConnectionView(APIView):
+    """
+    GET /api/email-sender/test-connection/
+    Test TurboSMTP connection without sending an email
+    """
+    def get(self, request):
+        try:
+            # Make a simple auth test request
+            test_payload = {
+                "authuser": settings.TURBOSMTP_CONSUMER_KEY,
+                "authpass": settings.TURBOSMTP_CONSUMER_SECRET,
+                "from": settings.DEFAULT_FROM_EMAIL,
+                "from_name": settings.DEFAULT_FROM_NAME or "BMM",
+                "to": "test@example.com",  # Test email
+                "subject": "Test de connexion",
+                "html_content": "<p>Test</p>",
+                "text_content": "Test",
+            }
+            
+            response = requests.post(
+                "https://api.turbo-smtp.com/api/v2/mail/send",
+                json=test_payload,
+                timeout=10
+            )
+            
+            return Response({
+                "success": response.status_code in (200, 202),
+                "status_code": response.status_code,
+                "response": response.text[:500],
+                "authuser_prefix": settings.TURBOSMTP_CONSUMER_KEY[:8] if settings.TURBOSMTP_CONSUMER_KEY else None,
+                "message": "Compte inactif" if response.status_code == 401 and "inactive" in response.text.lower() else "OK"
+            })
+            
+        except Exception as e:
+            return Response({
+                "success": False,
+                "error": str(e)
+            }, status=500)

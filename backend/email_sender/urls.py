@@ -16,6 +16,9 @@ from .views import (
     
     # Single email status (optional but nice for detail view)
     EmailSendingStatusView,
+    
+    
+    TestTurboSMTPConnectionView,
 )
 
 urlpatterns = [
@@ -42,4 +45,7 @@ urlpatterns = [
 
     # 8. Optional: detailed status of one sent/failed email
     path('emails/<int:email_id>/status/', EmailSendingStatusView.as_view(), name='email-sending-status'),
+
+    path('test-connection/', TestTurboSMTPConnectionView.as_view(), name='test-turbo-connection'),
+    
 ]

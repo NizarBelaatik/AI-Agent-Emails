@@ -1,18 +1,20 @@
 // src/components/Layout.jsx
-import React from 'react';
+import React, { useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { 
   Home, Users, Mail, FileText, Calendar, 
-  Settings, BarChart, Clock, Layers, Database 
+  Settings, BarChart, Clock, Layers, Database,
+  Menu, X
 } from 'lucide-react';
 
 const Layout = () => {
+  const [isOpen, setIsOpen] = useState(true);
+
   const navItems = [
     { path: '/', label: 'Dashboard', icon: Home },
     { path: '/import', label: 'Import', icon: Database },
     { path: '/email-generation', label: 'Email Generation', icon: Mail },
     { path: '/email-sender', label: 'Emails', icon: FileText },
-    
     { path: '/scheduled', label: 'Scheduled', icon: Clock },
     { path: '/campaigns', label: 'Campaigns', icon: Layers },
     { path: '/templates', label: 'Templates', icon: FileText },
@@ -22,9 +24,21 @@ const Layout = () => {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      
+      {/* Toggle Button */}
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="fixed top-4 left-4 z-50 bg-white p-2 rounded-lg shadow-md border"
+      >
+        {isOpen ? <X size={20} /> : <Menu size={20} />}
+      </button>
+
       {/* Sidebar */}
-      <div className="fixed left-0 top-0 h-screen w-64 bg-white border-r border-gray-200 shadow-sm">
-        <div className="p-6">
+      <div
+        className={`fixed left-0 top-0 h-screen w-64 bg-white border-r border-gray-200 shadow-sm transition-transform duration-300 z-40
+        ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}
+      >
+        <div className="p-6 mt-10">
           <h1 className="text-2xl font-bold text-gray-800">
             <span className="text-primary-600">.</span> Email Auto
           </h1>
@@ -67,7 +81,11 @@ const Layout = () => {
       </div>
 
       {/* Main content */}
-      <div className="ml-64 p-6">
+      <div
+        className={`p-6 transition-all duration-300 ${
+          isOpen ? 'ml-64' : 'ml-0'
+        }`}
+      >
         <Outlet />
       </div>
     </div>
