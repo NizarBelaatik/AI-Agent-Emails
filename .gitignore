@@ -1,0 +1,5 @@
+.env
+/backend/.env.example
+/backend/venv
+/backend-2
+**/__pycache__

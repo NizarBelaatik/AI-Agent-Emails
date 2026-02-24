@@ -4,9 +4,10 @@ import Import from './pages/Import';
 import EmailGeneration from './pages/EmailGeneration';
 import Dashboard from './pages/Dashboard';
 
-
 import SendEmails from './pages/EmailSender/SendEmails';
 import BatchDetails from './pages/EmailSender/BatchDetails';
+
+import EmailDispatcher from './pages/EmailDispatcher/EmailDispatcher';
 
 function App() {
   return (
@@ -21,6 +22,9 @@ function App() {
 
           <Route path="email-sender" element={<SendEmails />} />
           <Route path="/email-sender/batches/:id" element={<BatchDetails />} />
+
+          <Route path="/email-dispatcher" element={<EmailDispatcher />} />
+
 
         </Route>
       </Routes>
