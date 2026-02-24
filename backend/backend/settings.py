@@ -55,6 +55,7 @@ INSTALLED_APPS = [
     'core',     
     'email_generation',
     'email_sender',
+    'email_dispatcher',
 ]
 
 MIDDLEWARE = [
@@ -281,8 +282,8 @@ TURBOSMTP_CONSUMER_SECRET = os.environ.get('TURBOSMTP_CONSUMER_SECRET', '')
 TURBOSMTP_WEBHOOK_SECRET = os.environ.get('TURBOSMTP_WEBHOOK_SECRET', '')
 
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', '')
+DEFAULT_REPLY_TO = os.environ.get('DEFAULT_REPLY_TO', '')
 DEFAULT_FROM_NAME = os.environ.get('DEFAULT_FROM_NAME', 'BMM')
-
 
 
 #TURBOSMTP_WEBHOOK_SECRET = "https://bmm.ma/webhook/turbosmtp/"
