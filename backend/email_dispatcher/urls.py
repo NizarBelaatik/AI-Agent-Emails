@@ -4,6 +4,7 @@ from . import views
 urlpatterns = [
     # Email management
     path('emails/', views.EmailListView.as_view(), name='email-list'),
+    path('all-emails/', views.AllEmailsListView.as_view(), name='all-emails'),
     path('emails/<int:pk>/', views.EmailDetailView.as_view(), name='email-detail'),
     path('emails/stats/', views.EmailStatsView.as_view(), name='email-stats'),
     
@@ -25,4 +26,7 @@ urlpatterns = [
     # Available recipients from data_importer
     path('available-recipients/', views.AvailableRecipientsView.as_view(), name='available-recipients'),
     path('activities/', views.ActivitiesListView.as_view(), name='activities-list'),
+    
+    # Debug
+    path('debug-status/', views.DebugEmailStatusView.as_view(), name='debug-status'),
 ]

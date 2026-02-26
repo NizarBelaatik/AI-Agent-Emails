@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timedelta
 from django.utils import timezone
 from django.db.models import Q, Count
 from rest_framework.views import APIView
@@ -29,14 +30,47 @@ class CustomPagination(PageNumberPagination):
     max_page_size = 200
 
 
-# ============================================================
-# EMAIL MANAGEMENT
-# ============================================================
-
 class EmailListView(APIView):
     """
     GET /api/email-dispatcher/emails/
-    List all emails with filters
+    List all emails with filters - excludes sent emails by default
+    """
+    def get(self, request):
+        # Show all emails except 'sent'
+        queryset = DispatchEmail.objects.exclude(
+            status='sent'
+        ).order_by('-created_at')
+        
+        # Filters
+        status_filter = request.query_params.get('status')
+        search = request.query_params.get('search', '').strip()
+        batch_id = request.query_params.get('batch_id')
+        
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        
+        if batch_id:
+            queryset = queryset.filter(batch_id=batch_id)
+        
+        if search:
+            queryset = queryset.filter(
+                Q(recipient_name__icontains=search) |
+                Q(recipient_email__icontains=search) |
+                Q(subject__icontains=search)
+            )
+        
+        # Pagination
+        paginator = CustomPagination()
+        page = paginator.paginate_queryset(queryset, request)
+        serializer = DispatchEmailSerializer(page, many=True)
+        
+        return paginator.get_paginated_response(serializer.data)
+
+
+class AllEmailsListView(APIView):
+    """
+    GET /api/email-dispatcher/all-emails/
+    List ALL emails including sent ones
     """
     def get(self, request):
         queryset = DispatchEmail.objects.all().order_by('-created_at')
@@ -44,13 +78,9 @@ class EmailListView(APIView):
         # Filters
         status = request.query_params.get('status')
         search = request.query_params.get('search', '').strip()
-        batch_id = request.query_params.get('batch_id')
         
         if status:
             queryset = queryset.filter(status=status)
-        
-        if batch_id:
-            queryset = queryset.filter(batch_id=batch_id)
         
         if search:
             queryset = queryset.filter(
@@ -115,10 +145,6 @@ class EmailStatsView(APIView):
         })
 
 
-# ============================================================
-# CREATE EMAILS FROM RECIPIENTS
-# ============================================================
-
 class CreateEmailsFromRecipientsView(APIView):
     """
     POST /api/email-dispatcher/create-from-recipients/
@@ -128,6 +154,7 @@ class CreateEmailsFromRecipientsView(APIView):
         serializer = CreateEmailsFromRecipientsSerializer(data=request.data)
         
         if not serializer.is_valid():
+            logger.error(f"Create emails validation errors: {serializer.errors}")
             return Response(
                 {'success': False, 'errors': serializer.errors},
                 status=400
@@ -155,19 +182,18 @@ class CreateEmailsFromRecipientsView(APIView):
         })
 
 
-# ============================================================
-# SEND EMAILS
-# ============================================================
-
 class SendEmailsView(APIView):
     """
     POST /api/email-dispatcher/send/
-    Send selected emails
+    Send selected emails with intelligent scheduling
     """
     def post(self, request):
+        logger.info(f"SendEmailsView received data: {request.data}")
+        
         serializer = SendBatchSerializer(data=request.data)
         
         if not serializer.is_valid():
+            logger.error(f"Send emails validation errors: {serializer.errors}")
             return Response(
                 {'success': False, 'errors': serializer.errors},
                 status=400
@@ -192,10 +218,43 @@ class SendEmailsView(APIView):
         ).count()
         
         if invalid_status > 0:
+            invalid_emails = list(DispatchEmail.objects.filter(
+                id__in=email_ids
+            ).exclude(
+                status__in=['pending', 'queued']
+            ).values('id', 'status'))
+            
+            logger.warning(f"Invalid status emails: {invalid_emails}")
+            
             return Response({
                 'success': False,
-                'error': 'Certains emails ne sont pas en attente (déjà envoyés ou en cours)'
+                'error': 'Certains emails ne sont pas en attente (déjà envoyés ou en cours)',
+                'invalid_emails': invalid_emails
             }, status=400)
+        
+        # Calculate estimated time
+        total_emails = len(email_ids)
+        send_speed = data['send_speed']
+        estimated_minutes = 0
+        
+        if data['use_time_window'] and data['start_time'] and data['end_time']:
+            # Calculate window duration
+            start = datetime.combine(timezone.now().date(), data['start_time'])
+            end = datetime.combine(timezone.now().date(), data['end_time'])
+            if end <= start:
+                end = end + timedelta(days=1)
+            window_minutes = (end - start).total_seconds() / 60
+            
+            if data.get('distribution_method') == 'spread':
+                estimated_minutes = window_minutes
+            else:
+                delay = data.get('fixed_delay_seconds', 1)
+                estimated_minutes = (total_emails * delay) / 60
+        else:
+            if send_speed > 0:
+                estimated_minutes = (total_emails / send_speed) * 60
+            else:
+                estimated_minutes = total_emails * 0.5  # Rough estimate for unlimited
         
         # Start batch sending
         batch = send_emails_batch(
@@ -204,20 +263,19 @@ class SendEmailsView(APIView):
             send_speed=data['send_speed'],
             use_time_window=data['use_time_window'],
             start_time=data.get('start_time'),
-            end_time=data.get('end_time')
+            end_time=data.get('end_time'),
+            distribution_method=data.get('distribution_method', 'spread'),
+            fixed_delay_seconds=data.get('fixed_delay_seconds', 1)
         )
         
         return Response({
             'success': True,
-            'message': f"Envoi démarré pour {len(email_ids)} emails",
-            'batch_id': batch.batch_id,
-            'batch': DispatchBatchSerializer(batch).data
+            'message': f"Envoi démarré pour {total_emails} emails",
+            'batch_id': str(batch.batch_id),
+            'batch': DispatchBatchSerializer(batch).data,
+            'estimated_time': f"{estimated_minutes:.0f} minutes"
         }, status=status.HTTP_202_ACCEPTED)
 
-
-# ============================================================
-# BATCH MANAGEMENT
-# ============================================================
 
 class BatchListView(APIView):
     """
@@ -305,10 +363,6 @@ class BatchEmailsView(APIView):
         return paginator.get_paginated_response(serializer.data)
 
 
-# ============================================================
-# SENT EMAILS
-# ============================================================
-
 class SentEmailsListView(APIView):
     """
     GET /api/email-dispatcher/sent/
@@ -345,74 +399,71 @@ class SentEmailsListView(APIView):
         return paginator.get_paginated_response(serializer.data)
 
 
-# ============================================================
-# AVAILABLE RECIPIENTS (from data_importer)
-# ============================================================
-
 class AvailableRecipientsView(APIView):
     """
     GET /api/email-dispatcher/available-recipients/
     Get recipients from data_importer that can be used
     """
     def get(self, request):
-        # Get all recipients with email
-        queryset = Recipient.objects.filter(
-            email__isnull=False
-        ).exclude(
-            email=''
-        ).order_by('-created_at')
-        
-        # Basic filters
-        search = request.query_params.get('search', '').strip()
-        x_activitec = request.query_params.get('x_activitec', '').strip()
-        city = request.query_params.get('city', '').strip()
-        
-        if search:
-            queryset = queryset.filter(
-                Q(name__icontains=search) |
-                Q(complete_name__icontains=search) |
-                Q(email__icontains=search) |
-                Q(company_name__icontains=search)
-            )
-        
-        if x_activitec:
-            queryset = queryset.filter(x_activitec=x_activitec)
-        
-        if city:
-            queryset = queryset.filter(city__icontains=city)
-        
-        # Check if already used
-        used_recipient_ids = set(
-            DispatchEmail.objects.values_list('recipient_id', flat=True)
-        )
-        
-        # Pagination
-        paginator = CustomPagination()
-        page = paginator.paginate_queryset(queryset, request)
-        
-        result = []
-        for recipient in page:
-            result.append({
-                'id': recipient.id,
-                'name': recipient.name or recipient.complete_name or 'Inconnu',
-                'email': recipient.email,
-                'company_name': recipient.company_name,
-                'city': recipient.city,
-                'x_activitec': recipient.x_activitec,
-                'already_used': recipient.id in used_recipient_ids
+        try:
+            # Get all recipients with email that haven't been dispatched yet
+            queryset = Recipient.objects.filter(
+                email__isnull=False,
+                email_dispatched=False
+            ).exclude(
+                email=''
+            ).order_by('-created_at')
+            
+            # Basic filters
+            search = request.query_params.get('search', '').strip()
+            x_activitec = request.query_params.get('x_activitec', '').strip()
+            city = request.query_params.get('city', '').strip()
+            
+            if search:
+                queryset = queryset.filter(
+                    Q(name__icontains=search) |
+                    Q(complete_name__icontains=search) |
+                    Q(email__icontains=search) |
+                    Q(company_name__icontains=search)
+                )
+            
+            if x_activitec:
+                queryset = queryset.filter(x_activitec=x_activitec)
+            
+            if city:
+                queryset = queryset.filter(city__icontains=city)
+            
+            # Pagination
+            paginator = CustomPagination()
+            page = paginator.paginate_queryset(queryset, request)
+            
+            result = []
+            for recipient in page:
+                result.append({
+                    'id': recipient.id,
+                    'name': recipient.name or recipient.complete_name or 'Inconnu',
+                    'email': recipient.email,
+                    'company_name': recipient.company_name,
+                    'city': recipient.city,
+                    'x_activitec': recipient.x_activitec,
+                    'already_used': recipient.email_dispatched,
+                    'dispatch_count': recipient.email_dispatch_count,
+                    'dispatched_at': recipient.email_dispatched_at,
+                })
+            
+            return paginator.get_paginated_response(result)
+            
+        except Exception as e:
+            logger.error(f"Error in AvailableRecipientsView: {e}")
+            import traceback
+            traceback.print_exc()
+            return Response({
+                'count': 0,
+                'next': None,
+                'previous': None,
+                'results': []
             })
-        
-        return paginator.get_paginated_response({
-            'count': paginator.page.paginator.count,
-            'next': paginator.get_next_link(),
-            'previous': paginator.get_previous_link(),
-            'results': result
-        })
 
-
-# ============================================================
-# ACTIVITIES LIST (for filters)
-# ============================================================
 
 class ActivitiesListView(APIView):
     """
@@ -427,3 +478,30 @@ class ActivitiesListView(APIView):
         ).values_list('x_activitec', flat=True).distinct().order_by('x_activitec')
         
         return Response(list(activities))
+
+
+class DebugEmailStatusView(APIView):
+    """
+    GET /api/email-dispatcher/debug-status/
+    Debug endpoint to check email statuses
+    """
+    def get(self, request):
+        total = DispatchEmail.objects.count()
+        status_counts = {
+            'pending': DispatchEmail.objects.filter(status='pending').count(),
+            'queued': DispatchEmail.objects.filter(status='queued').count(),
+            'sending': DispatchEmail.objects.filter(status='sending').count(),
+            'sent': DispatchEmail.objects.filter(status='sent').count(),
+            'failed': DispatchEmail.objects.filter(status='failed').count(),
+        }
+        
+        # Get sample of recent emails
+        recent = list(DispatchEmail.objects.order_by('-created_at')[:10].values(
+            'id', 'status', 'recipient_email', 'subject', 'created_at'
+        ))
+        
+        return Response({
+            'total': total,
+            'status_counts': status_counts,
+            'recent_emails': recent
+        })

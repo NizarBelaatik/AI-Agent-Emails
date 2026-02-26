@@ -14,11 +14,16 @@ class DispatchEmail(models.Model):
         ('failed', 'Échoué'),
     ]
     
-    # Store recipient data from imported emails
-    recipient_id = models.IntegerField()  # ID from data_importer Recipient
+    # Link to recipient
+    recipient = models.ForeignKey(
+        'data_importer.Recipient',
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='dispatch_emails'
+    )
     recipient_name = models.CharField(max_length=255)
     recipient_email = models.EmailField()
-    recipient_data = models.JSONField(default=dict)  # Store all recipient data
+    recipient_data = models.JSONField(default=dict)
     
     # Email content
     subject = models.CharField(max_length=255)
@@ -39,8 +44,18 @@ class DispatchEmail(models.Model):
     error_message = models.TextField(blank=True)
     message_id = models.CharField(max_length=255, blank=True)
     
-    # Batch tracking
-    batch_id = models.CharField(max_length=100, blank=True, db_index=True)
+    # Batch tracking - USE ONLY THE FOREIGN KEY
+    # Django will automatically create batch_id field
+    batch = models.ForeignKey(
+        'DispatchBatch',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='emails'
+    )
+    # REMOVE THIS LINE: batch_id = models.CharField(max_length=100, blank=True, db_index=True)
+    
+    # You can keep batch_name for denormalization if needed
     batch_name = models.CharField(max_length=255, blank=True)
     
     created_at = models.DateTimeField(auto_now_add=True)
@@ -50,7 +65,8 @@ class DispatchEmail(models.Model):
         ordering = ['-created_at']
         indexes = [
             models.Index(fields=['status']),
-            models.Index(fields=['batch_id']),
+            # Use batch instead of batch_id for indexing
+            models.Index(fields=['batch']),
             models.Index(fields=['recipient_email']),
         ]
     
@@ -66,7 +82,8 @@ class DispatchBatch(models.Model):
         ('pending', 'En attente'),
         ('sending', 'En cours'),
         ('completed', 'Terminé'),
-        ('paused', 'En pause'),
+        ('completed_with_errors', 'Terminé avec erreurs'),
+        ('failed', 'Échoué'),
         ('cancelled', 'Annulé'),
     ]
     
@@ -75,12 +92,23 @@ class DispatchBatch(models.Model):
     
     # Sending settings
     send_speed = models.IntegerField(
-        default=50,
+        default=3600,
         help_text="Emails per hour"
     )
     use_time_window = models.BooleanField(default=False)
     start_time = models.TimeField(null=True, blank=True)
     end_time = models.TimeField(null=True, blank=True)
+    
+    # Distribution settings
+    distribution_method = models.CharField(
+        max_length=20,
+        choices=[
+            ('spread', 'Spread across window'),
+            ('fixed_delay', 'Fixed delay'),
+        ],
+        default='spread'
+    )
+    fixed_delay_seconds = models.IntegerField(default=1)
     
     # Stats
     total_emails = models.IntegerField(default=0)
@@ -88,7 +116,7 @@ class DispatchBatch(models.Model):
     failed_count = models.IntegerField(default=0)
     
     # Status
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    status = models.CharField(max_length=25, choices=STATUS_CHOICES, default='pending')
     
     # Timeline
     started_at = models.DateTimeField(null=True, blank=True)
@@ -113,7 +141,7 @@ class DispatchLog(models.Model):
     Simple log for sent emails
     """
     email = models.ForeignKey(DispatchEmail, on_delete=models.CASCADE, related_name='logs')
-    batch = models.ForeignKey(DispatchBatch, on_delete=models.CASCADE, null=True)
+    batch = models.ForeignKey(DispatchBatch, on_delete=models.CASCADE, null=True, blank=True)
     
     status = models.CharField(max_length=20)
     message_id = models.CharField(max_length=255, blank=True)

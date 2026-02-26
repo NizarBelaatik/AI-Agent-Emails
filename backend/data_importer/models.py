@@ -119,6 +119,12 @@ class Recipient(models.Model):
     active = models.BooleanField(default=True)
     is_company = models.BooleanField(default=False)
 
+    
+    # Email dispatch tracking - NEW FIELD
+    email_dispatched = models.BooleanField(default=False)
+    email_dispatched_at = models.DateTimeField(null=True, blank=True)
+    email_dispatch_count = models.IntegerField(default=0)
+    
     # Custom fields (your Odoo x_ fields)
     x_activitec = models.CharField(max_length=255, null=True, blank=True) # Category
     x_ice = models.CharField(max_length=255, null=True, blank=True)
@@ -228,11 +234,7 @@ class Recipient(models.Model):
     def __str__(self):
         return self.name or f"Recipient #{self.source_id}"
     
-    
-    
-# models.py - Add ImportTask model
 
-# models.py - Add this at the end
 
 class ImportTask(models.Model):
     STATUS_CHOICES = [

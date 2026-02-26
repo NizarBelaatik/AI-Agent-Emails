@@ -15,6 +15,9 @@ const Layout = () => {
     { path: '/import', label: 'Import', icon: Database },
     { path: '/email-generation', label: 'Email Generation', icon: Mail },
     { path: '/email-sender', label: 'Emails', icon: FileText },
+
+    { path: '/email-dispatcher', label: 'Email Dispatcher', icon: Mail },
+
     { path: '/scheduled', label: 'Scheduled', icon: Clock },
     { path: '/campaigns', label: 'Campaigns', icon: Layers },
     { path: '/templates', label: 'Templates', icon: FileText },

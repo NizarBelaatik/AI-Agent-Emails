@@ -1,23 +1,23 @@
-Django>=4.2 #,<5.0
-djangorestframework>=3.14
-django-filter>=23.5
-django-cors-headers>=4.3.1
-django-environ>=0.11.2
+Django==5.2.10
+djangorestframework==3.16.1
+django-cors-headers==4.9.0
+django-environ==0.12.0
 
-psycopg2-binary>=2.9.9   # if you're using PostgreSQL
-python-dotenv>=1.0.1     # optional (if you prefer dotenv)
+celery==5.6.2
+redis==7.1.1
 
-requests>=2.31.0         # often used in LLM/email services
+psycopg2-binary==2.9.11
 
-celery
-redis
+gunicorn==24.1.1
 
-#openai>=1.10.0           # if your LLMService uses OpenAI
-ollama
-jinja
-gunicorn>=21.2.0         # for deployment
+openai==2.16.0
+ollama==0.6.1
 
-boto3==1.34.0
+#boto3==1.34.0   # keep only if you use S3
+
+requests==2.32.5  # keep only if you make external HTTP calls
+
+python-dotenv==1.2.1  # optional if not using django-environ
 
 
 email-validator

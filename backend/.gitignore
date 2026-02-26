@@ -1,0 +1,25 @@
+__pycache__/
+*/__pycache__/
+*.pyc
+*.pyd
+*.pyo
+# Variations of a virtual environment
+.venv/
+env/
+venv/
+ENV/
+bin/
+include/
+lib/
+# Django stuff
+*.log
+*.pot
+local_settings.py
+db.sqlite3
+/media
+/static
+# IDE-specific files
+.idea/
+.vscode/
+# OS-specific files
+.DS_Store
