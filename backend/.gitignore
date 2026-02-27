@@ -24,3 +24,49 @@ db.sqlite3
 # OS-specific files
 .DS_Store
 .env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# Django
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Media & static (if generated)
+media/
+staticfiles/
+
+# Environment variables
+.env
+.env.*
+
+# Migrations (optional – only ignore if you know what you're doing)
+# */migrations/
+# !*/migrations/__init__.py
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# mypy
+.mypy_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
