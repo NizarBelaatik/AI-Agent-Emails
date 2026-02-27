@@ -33,13 +33,20 @@ class CustomPagination(PageNumberPagination):
 class EmailListView(APIView):
     """
     GET /api/email-dispatcher/emails/
-    List all emails with filters - excludes sent emails by default
+    List all emails with filters
     """
     def get(self, request):
-        # Show all emails except 'sent'
-        queryset = DispatchEmail.objects.exclude(
-            status='sent'
-        ).order_by('-created_at')
+        # Check if we should include sent emails
+        include_sent = request.query_params.get('include_sent', 'false').lower() == 'true'
+        
+        if include_sent:
+            # Include all emails
+            queryset = DispatchEmail.objects.all().order_by('-created_at')
+        else:
+            # Exclude sent emails (default behavior)
+            queryset = DispatchEmail.objects.exclude(
+                status='sent'
+            ).order_by('-created_at')
         
         # Filters
         status_filter = request.query_params.get('status')
@@ -65,7 +72,8 @@ class EmailListView(APIView):
         serializer = DispatchEmailSerializer(page, many=True)
         
         return paginator.get_paginated_response(serializer.data)
-
+    
+    
 
 class AllEmailsListView(APIView):
     """

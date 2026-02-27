@@ -33,7 +33,7 @@ const EmailDispatcher = () => {
   const [fromEmail, setFromEmail] = useState('contact@mail-bmm.ma');
   const [fromName, setFromName] = useState('BMM');
   const [replyTo, setReplyTo] = useState('contact@bmm.ma');
-  const [replyToName, setReplyToName] = useState('Service Commercial');
+  const [replyToName, setReplyToName] = useState('BMM');
   
   // Filters
   const [search, setSearch] = useState('');
@@ -77,23 +77,7 @@ const EmailDispatcher = () => {
     totalPages: 1,
   });
 
-  // Load data on mount
-  useEffect(() => {
-    fetchRecipients();
-    fetchActivities();
-    fetchEmails();
-    fetchBatches();
-    fetchStats();
-    
-    // Refresh every 10 seconds
-    const interval = setInterval(() => {
-      fetchEmails();
-      fetchBatches();
-      fetchStats();
-    }, 10000);
-    
-    return () => clearInterval(interval);
-  }, []);
+
 
   // Refetch when filters change
   useEffect(() => {
@@ -139,15 +123,43 @@ const EmailDispatcher = () => {
     }
   };
 
+
   const fetchEmails = async () => {
     try {
-      const data = await emailDispatcherAPI.getEmails();
+      const params = {};
+      
+      // This will now work correctly because activeTab is in the dependency array
+      if (activeTab === 'sent') {
+        params.include_sent = 'true';
+        params.status = 'sent';
+      }
+      
+      const data = await emailDispatcherAPI.getEmails(params);
       setEmails(Array.isArray(data.results) ? data.results : []);
     } catch (err) {
       console.error('Error fetching emails:', err);
       setEmails([]);
     }
   };
+
+  // Also update the refresh interval
+  useEffect(() => {
+    fetchRecipients();
+    fetchActivities();
+    fetchEmails(); // This will now use the correct endpoint based on activeTab
+    fetchBatches();
+    fetchStats();
+    
+    // Refresh every 10 seconds
+    const interval = setInterval(() => {
+      fetchEmails(); // Use correct endpoint based on activeTab
+      fetchBatches();
+      fetchStats();
+    }, 10000);
+    
+    return () => clearInterval(interval);
+  }, [activeTab]); // Add activeTab as dependency
+
 
   const fetchBatches = async () => {
     try {
@@ -1069,22 +1081,24 @@ L'équipe"
                     </td>
                   </tr>
                 ) : (
-                  emails.filter(e => e && e.status === 'sent').map(email => (
-                    <tr key={email.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 font-medium">{email.recipient_name || 'Inconnu'}</td>
-                      <td className="px-6 py-4 text-gray-600">{email.recipient_email || '—'}</td>
-                      <td className="px-6 py-4 text-gray-600 max-w-xs truncate">{email.subject || '—'}</td>
-                      <td className="px-6 py-4 text-sm text-gray-500">
-                        {email.sent_at ? new Date(email.sent_at).toLocaleString('fr-FR') : '—'}
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className="inline-flex items-center px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">
-                          <CheckCircle2 size={12} className="mr-1" />
-                          Envoyé
-                        </span>
-                      </td>
-                    </tr>
-                  ))
+                  emails
+                    .filter(e => e && e.status === 'sent')  // Filter to only show sent emails
+                    .map(email => (
+                      <tr key={email.id} className="hover:bg-gray-50">
+                        <td className="px-6 py-4 font-medium">{email.recipient_name || 'Inconnu'}</td>
+                        <td className="px-6 py-4 text-gray-600">{email.recipient_email || '—'}</td>
+                        <td className="px-6 py-4 text-gray-600 max-w-xs truncate">{email.subject || '—'}</td>
+                        <td className="px-6 py-4 text-sm text-gray-500">
+                          {email.sent_at ? new Date(email.sent_at).toLocaleString('fr-FR') : '—'}
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className="inline-flex items-center px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">
+                            <CheckCircle2 size={12} className="mr-1" />
+                            Envoyé
+                          </span>
+                        </td>
+                      </tr>
+                    ))
                 )}
               </tbody>
             </table>

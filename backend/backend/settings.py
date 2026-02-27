@@ -118,34 +118,6 @@ DATABASES = {
     }
 }
 
-DATABASES_2 =  {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('DB_NAME', 'email_app'),
-        'USER': os.getenv('DB_USER', 'app_user'),
-        'PASSWORD': os.getenv('DB_PASSWORD', 'app_password'),
-        'HOST': os.getenv('DB_HOST', 'localhost'),
-        'PORT': os.getenv('DB_PORT', '5432'),
-    },
-    'source_db': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('SOURCE_DB_NAME', 'source_db'),
-        'USER': os.getenv('SOURCE_DB_USER', 'readonly_user'),
-        'PASSWORD': os.getenv('SOURCE_DB_PASSWORD', 'readonly_pass'),
-        'HOST': os.getenv('SOURCE_DB_HOST', 'localhost'),
-        'PORT': os.getenv('SOURCE_DB_PORT', '5432'),
-    },
-    
-        'source_db': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('SOURCE_DB_NAME', 'odoo_test_full'),
-        'USER': os.getenv('SOURCE_DB_USER', 'auto_mail_user'),
-        'PASSWORD': os.getenv('SOURCE_DB_PASSWORD', 'odoo'),
-        'HOST': os.getenv('SOURCE_DB_HOST', '192.168.1.39'),
-        'PORT': os.getenv('SOURCE_DB_PORT', '5432'),
-    }
-}
-
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
 

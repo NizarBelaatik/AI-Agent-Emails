@@ -27,7 +27,14 @@ def send_via_turbosmtp(email):
         if not email.body_text and not email.body_html:
             return False, None, "No email content provided (neither text nor HTML)"
         
-        # Prepare payload
+        # Debug: Log the content before sending
+        logger.info(f"[TURBO] Email ID: {email.id}")
+        logger.info(f"[TURBO] Recipient: {email.recipient_email}")
+        logger.info(f"[TURBO] Subject: {email.subject}")
+        logger.info(f"[TURBO] Body text length: {len(email.body_text) if email.body_text else 0}")
+        logger.info(f"[TURBO] Body text preview: {email.body_text[:200] if email.body_text else 'EMPTY'}")
+        
+        # Prepare payload - Note: TurboSMTP might expect different field names
         payload = {
             "authuser": settings.TURBOSMTP_CONSUMER_KEY,
             "authpass": settings.TURBOSMTP_CONSUMER_SECRET,
@@ -37,7 +44,8 @@ def send_via_turbosmtp(email):
             "subject": email.subject,
         }
         
-        # Handle text content - this is what you primarily use
+        # IMPORTANT: Some email APIs use 'text' instead of 'text_content'
+        # Let's try both to be safe
         if email.body_text:
             # Make sure text content is properly formatted
             text_content = email.body_text.strip()
@@ -47,24 +55,16 @@ def send_via_turbosmtp(email):
                 text_content = text_content.replace('[Nom]', email.recipient.name)
                 text_content = text_content.replace('[nom]', email.recipient.name)
             
-            payload["text_content"] = text_content
+            # Try different field names that TurboSMTP might expect
+            payload["text"] = text_content  # Some APIs use 'text'
+            payload["text_content"] = text_content  # Your current field
             
-            # If no HTML provided, create a simple HTML version from text
-            if not email.body_html:
-                # Convert text to simple HTML (replace newlines with <br> and wrap in <p>)
-                html_lines = text_content.split('\n\n')
-                html_parts = []
-                for line in html_lines:
-                    if line.strip():
-                        # Replace single newlines with <br>
-                        line_with_breaks = line.replace('\n', '<br>')
-                        html_parts.append(f'<p>{line_with_breaks}</p>')
-                
-                simple_html = ''.join(html_parts)
-                payload["html_content"] = simple_html
-                logger.info(f"[TURBO] Created simple HTML from text ({len(simple_html)} chars)")
+            # Also include as plain_text for some APIs
+            payload["plain_text"] = text_content
+            
+            logger.info(f"[TURBO] Text content set, length: {len(text_content)}")
         
-        # Handle HTML content if provided separately
+        # Handle HTML content if provided
         if email.body_html:
             html_content = email.body_html.strip()
             
@@ -73,27 +73,55 @@ def send_via_turbosmtp(email):
                 html_content = html_content.replace('[Nom]', email.recipient.name)
                 html_content = html_content.replace('[nom]', email.recipient.name)
             
-            payload["html_content"] = html_content
+            payload["html"] = html_content  # Some APIs use 'html'
+            payload["html_content"] = html_content  # Your current field
+            
+            logger.info(f"[TURBO] HTML content set, length: {len(html_content)}")
+        elif email.body_text:
+            # If no HTML provided but we have text, create a simple HTML version
+            # Convert text to simple HTML
+            html_lines = text_content.split('\n\n')
+            html_parts = []
+            for line in html_lines:
+                if line.strip():
+                    # Replace single newlines with <br>
+                    line_with_breaks = line.replace('\n', '<br>')
+                    html_parts.append(f'<p>{line_with_breaks}</p>')
+            
+            simple_html = ''.join(html_parts)
+            payload["html"] = simple_html
+            payload["html_content"] = simple_html
+            logger.info(f"[TURBO] Created simple HTML from text ({len(simple_html)} chars)")
         
-        # Add reply-to if different from from
-        if email.reply_to and email.reply_to != email.from_email:
-            payload["reply_to"] = email.reply_to
-            if email.reply_to_name:
-                payload["reply_to_name"] = email.reply_to_name
+        # CRITICAL FIX: Set reply-to to the @bmm.ma address
+        # Even if from_email is @mail-bmm.ma, replies should go to @bmm.ma
+        reply_to_address = "Contact@bmm.ma"  # Replace with actual @bmm.ma address
+        reply_to_name = "BMM"  # Replace with actual name
+        
+        # Always set reply-to to the @bmm.ma address
+        payload["reply_to"] = reply_to_address
+
+        payload["reply_to_name"] = reply_to_name
+        
+        # Also set the standard Reply-To header field that some APIs expect
+        payload["reply-to"] = reply_to_address
+        payload["Reply-To"] = reply_to_address
+        payload["headers"] = {
+            "Reply-To": reply_to_address
+        }
+        logger.info(f"[TURBO] From: {email.from_email} (@mail-bmm.ma)")
+        logger.info(f"[TURBO] Reply-To: {reply_to_address} (@bmm.ma)")
         
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json"
         }
         
-        logger.info(f"[TURBO] Sending to {email.recipient_email}")
-        logger.info(f"[TURBO] Subject: {email.subject}")
-        logger.info(f"[TURBO] Text length: {len(payload.get('text_content', ''))}")
-        logger.info(f"[TURBO] HTML length: {len(payload.get('html_content', ''))}")
-        
-        # Log first 100 chars of content for debugging
-        if 'text_content' in payload:
-            logger.info(f"[TURBO] Text preview: {payload['text_content'][:100]}...")
+        # Log the full payload (excluding sensitive auth)
+        log_payload = payload.copy()
+        log_payload.pop('authuser', None)
+        log_payload.pop('authpass', None)
+        logger.info(f"[TURBO] Payload: {log_payload}")
         
         response = requests.post(
             TURBO_API_URL,
@@ -118,10 +146,12 @@ def send_via_turbosmtp(email):
             except:
                 pass
             
+            logger.info(f"[TURBO] Email sent successfully to {email.recipient_email}")
             return True, message_id, None
         else:
             error = f"HTTP {response.status_code}: {response.text[:200]}"
             logger.error(f"[TURBO] Error: {error}")
+            logger.error(f"[TURBO] Response body: {response.text}")
             
             # Log error
             try:
@@ -139,8 +169,9 @@ def send_via_turbosmtp(email):
             
     except Exception as e:
         logger.error(f"Error sending email: {e}")
-        return False, None, str(e)
-    
+        import traceback
+        traceback.print_exc()
+        return False, None, str(e)    
 
 def create_emails_from_recipients(recipient_ids, data):
     """
@@ -180,6 +211,14 @@ def create_emails_from_recipients(recipient_ids, data):
                 'website': recipient.website,
             }
             
+            # IMPORTANT: Force reply_to to be @bmm.ma even if from_email is @mail-bmm.ma
+            from_email = data['from_email']  # This should be @mail-bmm.ma
+            reply_to = "contact@bmm.ma"  # Replace with actual @bmm.ma address
+            reply_to_name = "BMM"  # Replace with actual name
+            
+            # Log the configuration
+            logger.info(f"Creating email - From: {from_email}, Reply-To: {reply_to}")
+            
             # Create email
             email = DispatchEmail.objects.create(
                 recipient=recipient,
@@ -189,10 +228,10 @@ def create_emails_from_recipients(recipient_ids, data):
                 subject=data['subject'],
                 body_html=data.get('body_html', ''),
                 body_text=data['body_text'],
-                from_email=data['from_email'],
+                from_email=from_email,  # Send from @mail-bmm.ma
                 from_name=data.get('from_name', ''),
-                reply_to=data['reply_to'],
-                reply_to_name=data.get('reply_to_name', ''),
+                reply_to=reply_to,  # Force replies to go to @bmm.ma
+                reply_to_name=reply_to_name,
                 status='pending'
             )
             
@@ -205,7 +244,6 @@ def create_emails_from_recipients(recipient_ids, data):
             logger.info(f"Created email {email.id} for recipient {recipient.id} with status 'pending'")
     
     return emails, None
-
 
 
 def send_emails_batch(email_ids, batch_name, send_speed=3600, 
