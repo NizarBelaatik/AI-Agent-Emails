@@ -49,13 +49,9 @@ class BrowseSourceView(APIView):
     def get(self, request):
         try:
             # --- Safely get imported_ids ---
-            imported_ids_raw = Recipient.objects.values_list('source_id', flat=True)
-            imported_ids = set()
-            for i in imported_ids_raw:
-                try:
-                    imported_ids.add(int(i))
-                except (ValueError, TypeError):
-                    logger.warning(f"Skipping invalid source_id: {i}")
+
+
+            imported_ids = set(Recipient.objects.values_list('source_id', flat=True))
 
             # --- Base queryset ---
             queryset = SourcePartner.objects.using('source_db').order_by('-id').exclude(id__in=imported_ids)
@@ -152,13 +148,15 @@ class BrowseSourceView(APIView):
             return paginator.get_paginated_response(serializer.data)
 
         except Exception as e:
-            logger.error(f"BrowseSourceView read error: {e}")
+            import traceback
             return Response({
                 'success': False,
+                'stage': 'global_exception',
                 'error': str(e),
-                'message': 'Read-only access failed. Check filters or DB connectivity.'
+                'query_params': dict(request.query_params),
+                'traceback': traceback.format_exc(),
             }, status=500)
-        
+                
 
 
 

@@ -2,6 +2,19 @@ from rest_framework import serializers
 from .models import SourcePartner
 
 class SourcePartnerSerializer(serializers.ModelSerializer):
+    # Declare the SerializerMethodField
+    specific_property_product_pricelist = serializers.SerializerMethodField()
+
+    def get_specific_property_product_pricelist(self, obj):
+        val = obj.specific_property_product_pricelist
+        if isinstance(val, dict):
+            # pick the first value
+            return list(val.values())[0]
+        try:
+            return int(val)
+        except (ValueError, TypeError):
+            return None
+
     class Meta:
         model = SourcePartner
         fields = [
@@ -49,7 +62,7 @@ class SourcePartnerSerializer(serializers.ModelSerializer):
             'message_bounce',
             'email_normalized',
             'signup_type',
-            'specific_property_product_pricelist',
+            'specific_property_product_pricelist',  # now correctly mapped
             'partner_gid',
             'additional_info',
             'phone_sanitized',
@@ -89,7 +102,6 @@ class SourcePartnerSerializer(serializers.ModelSerializer):
             'purchase_warn_msg',
             'is_converted_to_lead',
             'lead_conversion_date',
-
             # fixed custom fields
             'x_ice',
             'x_source',

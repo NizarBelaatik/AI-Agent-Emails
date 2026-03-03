@@ -39,9 +39,19 @@ DEBUG = os.getenv('DEBUG', 'True') == 'True'
 ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
+    "0.0.0.0",
+
+
     "django_backend",
-    "django_backend:8000",
-    "*"
+    "backend",
+    "nginx",
+    "nginx_server",
+    
+    "192.168.1.39",
+    "192.168.1.62",
+    
+    "*",
+    
 ]
 # Application definition
 
@@ -81,10 +91,16 @@ CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:8080",
     "http://127.0.0.1:8080",
+    "http://192.168.1.39:8080",
+
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "http://192.168.1.39:3000",
+
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://192.168.1.39:5173",
+
 ]
 
 ROOT_URLCONF = 'backend.urls'

@@ -1,8 +1,11 @@
 // src/services/api.js - FIXED INTERCEPTOR
 import axios from 'axios';
 
-//const API_BASE = '/api'//import.meta.env.VITE_API_URL || '/api';
-const API_BASE = 'http://django_backend:8000/api';
+const API_BASE = '/api'//import.meta.env.VITE_API_URL || '/api';
+//const API_BASE = import.meta.env.VITE_BACKEND_URL || 'http://192.168.1.39:8000';
+
+
+//const API_BASE = 'http://django_backend:8000/api';
 const api = axios.create({
   baseURL: API_BASE,
   headers: {

@@ -39,6 +39,8 @@ services:
     build:
       context: ./frontend                # project root
       dockerfile: Dockerfile
+      args:
+        - VITE_API_URL=/api
     container_name: react_frontend
     networks:
       - app_network
@@ -66,3 +68,6 @@ services:
 
 networks:
   app_network:
+    #driver: bridge
+    name: ai-agent-emails_app_network
+    external: true 
