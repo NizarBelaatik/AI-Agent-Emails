@@ -130,9 +130,14 @@ DATABASE_ROUTERS = ['data_importer.db_routers.SourceRouter']
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.getenv('DEFAULT_DB_NAME', 'auto_mail_db'),
+        'USER': os.getenv('DEFAULT_DB_USER', 'auto_mail_user_admin'),
+        'PASSWORD': os.getenv('DEFAULT_DB_PASSWORD', 'auto_mail_user_admin_pw'),
+        'HOST': os.getenv('DEFAULT_DB_HOST', '192.168.1.39'),
+        'PORT': os.getenv('DEFAULT_DB_PORT', '5432'),
     },
+
     'source_db': {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': os.getenv('SOURCE_DB_NAME', 'odoo_test_full'),
@@ -143,6 +148,12 @@ DATABASES = {
     }
 }
 
+DATABASES_2 = {
+    'default': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
+    }
+}
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
 
