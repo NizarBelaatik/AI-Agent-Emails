@@ -1,0 +1,23 @@
+-- 1. Create a new PostgreSQL user
+CREATE USER auto_mail_user_admin WITH PASSWORD 'auto_mail_user_admin_pw';
+
+-- 2. Give the user ability to create databases (optional, useful for development)
+ALTER USER auto_mail_user_admin CREATEDB;
+
+-- 3. Create a new database owned by this user
+CREATE DATABASE auto_mail_db OWNER auto_mail_user_admin;
+
+-- 4. Connect to the new database
+\c auto_mail_db
+
+-- 5. Make the user the owner of the public schema
+ALTER SCHEMA public OWNER TO auto_mail_user_admin;
+
+-- 6. Grant full privileges on the public schema
+GRANT ALL ON SCHEMA public TO auto_mail_user_admin;
+
+-- 7. Grant privileges on all existing tables in the schema (if any)
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO auto_mail_user_admin;
+
+-- 8. Grant privileges on all sequences in the schema (important for auto-increment fields)
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO auto_mail_user_admin;
