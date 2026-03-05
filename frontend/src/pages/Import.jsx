@@ -1,4 +1,3 @@
-
 // src/pages/Import.jsx
 import React, { useState, useEffect, useRef } from 'react';
 import {
@@ -103,11 +102,24 @@ const Import = () => {
     totalPages: 1,
   });
   
+  // Display options for showing all rows
+  const [displayOptions, setDisplayOptions] = useState({
+    showAll: false,
+    maxRows: 5000,
+    pageSizeOptions: [50, 100, 250, 500, 1000, 2500, 5000]
+  });
+  
   const [importedPagination, setImportedPagination] = useState({
     page: 1,
     pageSize: 50,
     totalCount: 0,
     totalPages: 1,
+  });
+  
+  const [importedDisplayOptions, setImportedDisplayOptions] = useState({
+    showAll: false,
+    maxRows: 5000,
+    pageSizeOptions: [50, 100, 250, 500, 1000, 2500, 5000]
   });
   
   const [loading, setLoading] = useState(false);
@@ -181,13 +193,13 @@ const Import = () => {
     fetchRecipients();
     fetchStats();
     fetchInvalidRecipients();
-  }, [filters, pagination.page, sortConfig]);
+  }, [filters, pagination.page, pagination.pageSize, sortConfig, displayOptions.showAll]);
 
   useEffect(() => {
     if (activeTab === 'imported') {
       fetchImportedRecipients();
     }
-  }, [activeTab, importedFilters, importedPagination.page]);
+  }, [activeTab, importedFilters, importedPagination.page, importedPagination.pageSize, importedDisplayOptions.showAll]);
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -265,8 +277,8 @@ const Import = () => {
       
       // Build params object with all filters
       const params = {
-        page: pagination.page,
-        page_size: pagination.pageSize,
+        page: displayOptions.showAll ? 1 : pagination.page,
+        page_size: displayOptions.showAll ? displayOptions.maxRows : pagination.pageSize,
         sort_by: sortConfig.key,
         sort_direction: sortConfig.direction,
       };
@@ -291,7 +303,9 @@ const Import = () => {
         setPagination(prev => ({
           ...prev,
           totalCount: data.count || 0,
-          totalPages: Math.ceil((data.count || 0) / prev.pageSize) || 1,
+          totalPages: displayOptions.showAll 
+            ? 1
+            : Math.ceil((data.count || 0) / prev.pageSize) || 1,
         }));
 
         // Update filter options from response
@@ -327,8 +341,8 @@ const Import = () => {
       
       // Build params object with all filters
       const params = {
-        page: importedPagination.page,
-        page_size: importedPagination.pageSize,
+        page: importedDisplayOptions.showAll ? 1 : importedPagination.page,
+        page_size: importedDisplayOptions.showAll ? importedDisplayOptions.maxRows : importedPagination.pageSize,
       };
       
       Object.entries(importedFilters).forEach(([key, value]) => {
@@ -345,7 +359,9 @@ const Import = () => {
         setImportedPagination(prev => ({
           ...prev,
           totalCount: data.count || 0,
-          totalPages: Math.ceil((data.count || 0) / prev.pageSize) || 1,
+          totalPages: importedDisplayOptions.showAll
+            ? 1
+            : Math.ceil((data.count || 0) / prev.pageSize) || 1,
         }));
 
         // Update filter options
@@ -617,6 +633,38 @@ const Import = () => {
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text);
     // You could add a toast notification here
+  };
+
+  const toggleDisplayMode = (showAll) => {
+    setDisplayOptions(prev => ({ ...prev, showAll }));
+    setPagination(prev => ({ ...prev, page: 1 }));
+    fetchRecipients();
+  };
+
+  const changePageSize = (newSize) => {
+    setPagination(prev => ({ 
+      ...prev, 
+      pageSize: newSize,
+      page: 1
+    }));
+    setDisplayOptions(prev => ({ ...prev, showAll: false }));
+    fetchRecipients();
+  };
+
+  const toggleImportedDisplayMode = (showAll) => {
+    setImportedDisplayOptions(prev => ({ ...prev, showAll }));
+    setImportedPagination(prev => ({ ...prev, page: 1 }));
+    fetchImportedRecipients();
+  };
+
+  const changeImportedPageSize = (newSize) => {
+    setImportedPagination(prev => ({ 
+      ...prev, 
+      pageSize: newSize,
+      page: 1
+    }));
+    setImportedDisplayOptions(prev => ({ ...prev, showAll: false }));
+    fetchImportedRecipients();
   };
 
   const activeFilterCount = countActiveFilters();
@@ -896,6 +944,54 @@ const Import = () => {
                 </button>
               </div>
 
+              {/* Display Options Dropdown */}
+              <div className="relative">
+                <select
+                  value={displayOptions.showAll ? 'all' : pagination.pageSize}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === 'all') {
+                      toggleDisplayMode(true);
+                    } else {
+                      changePageSize(parseInt(value));
+                    }
+                  }}
+                  className="px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 text-sm bg-white cursor-pointer min-w-[160px]"
+                >
+                  <optgroup label="Pages">
+                    {displayOptions.pageSizeOptions.map(size => (
+                      <option key={size} value={size}>
+                        {size} par page
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Mode spécial">
+                    <option value="all">Tout afficher (max {displayOptions.maxRows})</option>
+                  </optgroup>
+                </select>
+              </div>
+
+              {/* Show indicator when in "show all" mode */}
+              {displayOptions.showAll && (
+                <div className="flex items-center gap-2 bg-indigo-50 px-4 py-2 rounded-xl border border-indigo-200">
+                  <Eye size={16} className="text-indigo-600" />
+                  <span className="text-sm text-indigo-700">
+                    Affichage de tous les résultats
+                  </span>
+                  <button
+                    onClick={() => {
+                      setDisplayOptions(prev => ({ ...prev, showAll: false }));
+                      setPagination(prev => ({ ...prev, pageSize: 50, page: 1 }));
+                      fetchRecipients();
+                    }}
+                    className="ml-2 p-1 hover:bg-indigo-200 rounded-lg transition-colors"
+                    title="Revenir au mode paginé"
+                  >
+                    <X size={14} className="text-indigo-600" />
+                  </button>
+                </div>
+              )}
+
               <Button
                 variant="outline"
                 onClick={() => setShowAdvancedFilters(true)}
@@ -980,6 +1076,54 @@ const Import = () => {
                 />
               </div>
 
+              {/* Display Options for Imported Tab */}
+              <div className="relative">
+                <select
+                  value={importedDisplayOptions.showAll ? 'all' : importedPagination.pageSize}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === 'all') {
+                      toggleImportedDisplayMode(true);
+                    } else {
+                      changeImportedPageSize(parseInt(value));
+                    }
+                  }}
+                  className="px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 text-sm bg-white cursor-pointer min-w-[160px]"
+                >
+                  <optgroup label="Pages">
+                    {importedDisplayOptions.pageSizeOptions.map(size => (
+                      <option key={size} value={size}>
+                        {size} par page
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Mode spécial">
+                    <option value="all">Tout afficher (max {importedDisplayOptions.maxRows})</option>
+                  </optgroup>
+                </select>
+              </div>
+
+              {/* Show indicator when in "show all" mode for imported */}
+              {importedDisplayOptions.showAll && (
+                <div className="flex items-center gap-2 bg-green-50 px-4 py-2 rounded-xl border border-green-200">
+                  <Eye size={16} className="text-green-600" />
+                  <span className="text-sm text-green-700">
+                    Affichage de tous les résultats
+                  </span>
+                  <button
+                    onClick={() => {
+                      setImportedDisplayOptions(prev => ({ ...prev, showAll: false }));
+                      setImportedPagination(prev => ({ ...prev, pageSize: 50, page: 1 }));
+                      fetchImportedRecipients();
+                    }}
+                    className="ml-2 p-1 hover:bg-green-200 rounded-lg transition-colors"
+                    title="Revenir au mode paginé"
+                  >
+                    <X size={14} className="text-green-600" />
+                  </button>
+                </div>
+              )}
+
               <Button
                 variant="outline"
                 onClick={fetchImportedRecipients}
@@ -1003,9 +1147,9 @@ const Import = () => {
 
         {/* Valid Recipients Table */}
         {activeTab === 'valid' && (
-          <Card className="overflow-hidden border-0 shadow-xl">
+          <Card className="overflow-hidden border-0 shadow-xl flex flex-col" style={{ height: 'calc(100vh - 400px)' }}>
             {loading ? (
-              <div className="flex flex-col items-center justify-center py-32">
+              <div className="flex flex-col items-center justify-center py-32 h-full">
                 <div className="relative">
                   <div className="animate-spin rounded-full h-16 w-16 border-4 border-indigo-200 border-t-indigo-600"></div>
                   <div className="absolute inset-0 flex items-center justify-center">
@@ -1015,7 +1159,7 @@ const Import = () => {
                 <p className="text-gray-600 mt-4 font-medium">Chargement des partenaires...</p>
               </div>
             ) : validRecipients.length === 0 ? (
-              <div className="text-center py-24 text-gray-500">
+              <div className="text-center py-24 text-gray-500 h-full">
                 <div className="bg-gray-100 w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-6">
                   <Mail size={40} className="text-gray-400" />
                 </div>
@@ -1026,9 +1170,10 @@ const Import = () => {
               </div>
             ) : (
               <>
-                <div className="overflow-x-auto">
+                {/* Scrollable table container */}
+                <div className="flex-1 overflow-auto">
                   <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
+                    <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
                       <tr>
                         <th className="px-4 py-4 w-12">
                           <input
@@ -1147,52 +1292,67 @@ const Import = () => {
                   </table>
                 </div>
 
-                {/* Pagination */}
-                <div className="flex items-center justify-between px-6 py-4 border-t bg-gray-50">
-                  <div className="text-sm text-gray-700">
-                    Affichage <span className="font-medium">{validRecipients.length}</span> sur{' '}
-                    <span className="font-medium">{pagination.totalCount.toLocaleString()}</span> résultats
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <Button 
-                      variant="outline" 
-                      size="sm" 
-                      onClick={() => handlePageChange(pagination.page - 1)} 
-                      disabled={pagination.page === 1 || loading}
-                      className="border-gray-300"
-                    >
-                      <ChevronLeft size={16} />
-                    </Button>
-                    <div className="flex items-center gap-2">
-                      {[...Array(Math.min(5, pagination.totalPages))].map((_, i) => {
-                        const pageNum = pagination.page + i - 2;
-                        if (pageNum < 1 || pageNum > pagination.totalPages) return null;
-                        return (
-                          <button
-                            key={pageNum}
-                            onClick={() => handlePageChange(pageNum)}
-                            className={`w-8 h-8 rounded-lg text-sm font-medium transition-colors ${
-                              pagination.page === pageNum
-                                ? 'bg-indigo-600 text-white'
-                                : 'text-gray-700 hover:bg-gray-200'
-                            }`}
-                          >
-                            {pageNum}
-                          </button>
-                        );
-                      })}
+                {/* Pagination - Only show when not in "show all" mode */}
+                {!displayOptions.showAll && (
+                  <div className="flex items-center justify-between px-6 py-4 border-t bg-gray-50">
+                    <div className="text-sm text-gray-700">
+                      Affichage <span className="font-medium">{validRecipients.length}</span> sur{' '}
+                      <span className="font-medium">{pagination.totalCount.toLocaleString()}</span> résultats
                     </div>
-                    <Button 
-                      variant="outline" 
-                      size="sm" 
-                      onClick={() => handlePageChange(pagination.page + 1)} 
-                      disabled={pagination.page >= pagination.totalPages || loading}
-                      className="border-gray-300"
-                    >
-                      <ChevronRight size={16} />
-                    </Button>
+                    <div className="flex items-center gap-3">
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={() => handlePageChange(pagination.page - 1)} 
+                        disabled={pagination.page === 1 || loading}
+                        className="border-gray-300"
+                      >
+                        <ChevronLeft size={16} />
+                      </Button>
+                      <div className="flex items-center gap-2">
+                        {[...Array(Math.min(5, pagination.totalPages))].map((_, i) => {
+                          const pageNum = pagination.page + i - 2;
+                          if (pageNum < 1 || pageNum > pagination.totalPages) return null;
+                          return (
+                            <button
+                              key={pageNum}
+                              onClick={() => handlePageChange(pageNum)}
+                              className={`w-8 h-8 rounded-lg text-sm font-medium transition-colors ${
+                                pagination.page === pageNum
+                                  ? 'bg-indigo-600 text-white'
+                                  : 'text-gray-700 hover:bg-gray-200'
+                              }`}
+                            >
+                              {pageNum}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={() => handlePageChange(pagination.page + 1)} 
+                        disabled={pagination.page >= pagination.totalPages || loading}
+                        className="border-gray-300"
+                      >
+                        <ChevronRight size={16} />
+                      </Button>
+                    </div>
                   </div>
-                </div>
+                )}
+                
+                {/* Summary when showing all */}
+                {displayOptions.showAll && (
+                  <div className="px-6 py-4 border-t bg-gray-50 text-sm text-gray-700">
+                    Affichage de <span className="font-medium">{validRecipients.length}</span> résultats sur{' '}
+                    <span className="font-medium">{pagination.totalCount.toLocaleString()}</span> au total
+                    {validRecipients.length >= displayOptions.maxRows && (
+                      <span className="ml-2 text-amber-600">
+                        (limité à {displayOptions.maxRows} lignes)
+                      </span>
+                    )}
+                  </div>
+                )}
               </>
             )}
           </Card>
@@ -1216,7 +1376,7 @@ const Import = () => {
                   <p className="font-medium">Aucun email invalide trouvé</p>
                 </div>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-3 max-h-[600px] overflow-y-auto">
                   {invalidRecipients.map((item) => (
                     <div key={item.id} className="flex items-center justify-between p-4 bg-amber-50 rounded-xl border border-amber-200 hover:bg-amber-100/50 transition-all group">
                       <div className="flex items-center gap-4">
@@ -1250,9 +1410,9 @@ const Import = () => {
 
         {/* Imported Recipients Table */}
         {activeTab === 'imported' && (
-          <Card className="overflow-hidden border-0 shadow-xl">
+          <Card className="overflow-hidden border-0 shadow-xl flex flex-col" style={{ height: 'calc(100vh - 400px)' }}>
             {importedLoading ? (
-              <div className="flex flex-col items-center justify-center py-32">
+              <div className="flex flex-col items-center justify-center py-32 h-full">
                 <div className="relative">
                   <div className="animate-spin rounded-full h-16 w-16 border-4 border-green-200 border-t-green-600"></div>
                   <div className="absolute inset-0 flex items-center justify-center">
@@ -1262,7 +1422,7 @@ const Import = () => {
                 <p className="text-gray-600 mt-4 font-medium">Chargement des importés...</p>
               </div>
             ) : importedRecipients.length === 0 ? (
-              <div className="text-center py-24 text-gray-500">
+              <div className="text-center py-24 text-gray-500 h-full">
                 <div className="bg-gray-100 w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-6">
                   <Download size={40} className="text-gray-400" />
                 </div>
@@ -1273,9 +1433,10 @@ const Import = () => {
               </div>
             ) : (
               <>
-                <div className="overflow-x-auto">
+                {/* Scrollable table container */}
+                <div className="flex-1 overflow-auto">
                   <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
+                    <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
                       <tr>
                         <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
                         <th className="px-4 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nom</th>
@@ -1347,52 +1508,67 @@ const Import = () => {
                   </table>
                 </div>
 
-                {/* Pagination */}
-                <div className="flex items-center justify-between px-6 py-4 border-t bg-gray-50">
-                  <div className="text-sm text-gray-700">
-                    Affichage <span className="font-medium">{importedRecipients.length}</span> sur{' '}
-                    <span className="font-medium">{importedPagination.totalCount.toLocaleString()}</span> importés
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <Button 
-                      variant="outline" 
-                      size="sm" 
-                      onClick={() => handleImportedPageChange(importedPagination.page - 1)} 
-                      disabled={importedPagination.page === 1 || importedLoading}
-                      className="border-gray-300"
-                    >
-                      <ChevronLeft size={16} />
-                    </Button>
-                    <div className="flex items-center gap-2">
-                      {[...Array(Math.min(5, importedPagination.totalPages))].map((_, i) => {
-                        const pageNum = importedPagination.page + i - 2;
-                        if (pageNum < 1 || pageNum > importedPagination.totalPages) return null;
-                        return (
-                          <button
-                            key={pageNum}
-                            onClick={() => handleImportedPageChange(pageNum)}
-                            className={`w-8 h-8 rounded-lg text-sm font-medium transition-colors ${
-                              importedPagination.page === pageNum
-                                ? 'bg-green-600 text-white'
-                                : 'text-gray-700 hover:bg-gray-200'
-                            }`}
-                          >
-                            {pageNum}
-                          </button>
-                        );
-                      })}
+                {/* Pagination - Only show when not in "show all" mode */}
+                {!importedDisplayOptions.showAll && (
+                  <div className="flex items-center justify-between px-6 py-4 border-t bg-gray-50">
+                    <div className="text-sm text-gray-700">
+                      Affichage <span className="font-medium">{importedRecipients.length}</span> sur{' '}
+                      <span className="font-medium">{importedPagination.totalCount.toLocaleString()}</span> importés
                     </div>
-                    <Button 
-                      variant="outline" 
-                      size="sm" 
-                      onClick={() => handleImportedPageChange(importedPagination.page + 1)} 
-                      disabled={importedPagination.page >= importedPagination.totalPages || importedLoading}
-                      className="border-gray-300"
-                    >
-                      <ChevronRight size={16} />
-                    </Button>
+                    <div className="flex items-center gap-3">
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={() => handleImportedPageChange(importedPagination.page - 1)} 
+                        disabled={importedPagination.page === 1 || importedLoading}
+                        className="border-gray-300"
+                      >
+                        <ChevronLeft size={16} />
+                      </Button>
+                      <div className="flex items-center gap-2">
+                        {[...Array(Math.min(5, importedPagination.totalPages))].map((_, i) => {
+                          const pageNum = importedPagination.page + i - 2;
+                          if (pageNum < 1 || pageNum > importedPagination.totalPages) return null;
+                          return (
+                            <button
+                              key={pageNum}
+                              onClick={() => handleImportedPageChange(pageNum)}
+                              className={`w-8 h-8 rounded-lg text-sm font-medium transition-colors ${
+                                importedPagination.page === pageNum
+                                  ? 'bg-green-600 text-white'
+                                  : 'text-gray-700 hover:bg-gray-200'
+                              }`}
+                            >
+                              {pageNum}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={() => handleImportedPageChange(importedPagination.page + 1)} 
+                        disabled={importedPagination.page >= importedPagination.totalPages || importedLoading}
+                        className="border-gray-300"
+                      >
+                        <ChevronRight size={16} />
+                      </Button>
+                    </div>
                   </div>
-                </div>
+                )}
+
+                {/* Summary when showing all */}
+                {importedDisplayOptions.showAll && (
+                  <div className="px-6 py-4 border-t bg-gray-50 text-sm text-gray-700">
+                    Affichage de <span className="font-medium">{importedRecipients.length}</span> résultats sur{' '}
+                    <span className="font-medium">{importedPagination.totalCount.toLocaleString()}</span> au total
+                    {importedRecipients.length >= importedDisplayOptions.maxRows && (
+                      <span className="ml-2 text-amber-600">
+                        (limité à {importedDisplayOptions.maxRows} lignes)
+                      </span>
+                    )}
+                  </div>
+                )}
               </>
             )}
           </Card>
@@ -1719,7 +1895,6 @@ const Import = () => {
                   </div>
                 </div>
 
-                {/* Numeric Ranges */}
                 {/* Numeric Ranges */}
                 <div className="bg-gray-50 p-5 rounded-xl">
                   <h3 className="text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2">

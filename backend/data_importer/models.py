@@ -91,12 +91,14 @@ class SourcePartner(models.Model):
     # Your custom x_ fields
     x_ice = models.CharField(max_length=255, null=True, blank=True)
     x_source = models.CharField(max_length=255, null=True, blank=True)
-    x_Capital = models.CharField(max_length=255, null=True, blank=True)
+    x_Capital = models.CharField(max_length=255, null=True, blank=True
+                                 ,db_column='x_capital'
+                                )
     x_activitec = models.CharField(max_length=255, null=True, blank=True) # Category
     x_effectif = models.CharField(max_length=255, null=True, blank=True)
     x_forme_juridique = models.CharField(max_length=255, null=True, blank=True)
-    x_RC = models.CharField(max_length=255, null=True, blank=True)
-    x_IF = models.CharField(max_length=255, null=True, blank=True)
+    x_RC = models.CharField(max_length=255, null=True, blank=True,db_column="x_rc")
+    x_IF = models.CharField(max_length=255, null=True, blank=True, db_column="x_if")
 
     class Meta:
         managed = False
@@ -133,7 +135,7 @@ class Recipient(models.Model):
         max_length=255,
         null=True,
         blank=True,
-        db_column='x_Capital'
+        #db_column='x_Capital'
     )    
     
     x_effectif = models.CharField(max_length=255, null=True, blank=True)
