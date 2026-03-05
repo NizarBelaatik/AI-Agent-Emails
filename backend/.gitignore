@@ -50,6 +50,8 @@ staticfiles/
 # Environment variables
 .env
 .env.*
+.python-version
+
 
 # Migrations (optional – only ignore if you know what you're doing)
 # */migrations/

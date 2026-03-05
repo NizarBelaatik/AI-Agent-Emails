@@ -12,7 +12,7 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       proxy: {
         '/api': {
-          target: 'http://192.168.1.39:8000', // django_backend  backendHOST,
+          target: backendHOST,//'http://192.168.1.39:8000', // django_backend  backendHOST,
           changeOrigin: true,
           secure: false,
         },

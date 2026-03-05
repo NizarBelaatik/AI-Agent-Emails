@@ -50,7 +50,7 @@ def run_import_background(task_id, selected_ids):
 
         for i in range(0, total, batch_size):
             batch = source_partners[i:i+batch_size]
-
+            
             # Validate batch
             valid_recipients, invalid_recipients, reasons = validate_recipient_batch(batch)
 
@@ -67,8 +67,12 @@ def run_import_background(task_id, selected_ids):
             for sp in valid_recipients:
                 try:
                     with transaction.atomic():
+                        print("SOURCE:", sp.id, sp.name, repr(sp.x_activitec))
+                        print("\n \n\n name ",sp.name , " acti ",sp.x_activitec )
+
                         recipient, created = Recipient.objects.update_or_create(
                             source_id=sp.id,
+
                             defaults={
                                 # Core fields
                                 'name': sp.name,
@@ -167,6 +171,8 @@ def run_import_background(task_id, selected_ids):
                                 'lead_conversion_date': make_aware(sp.lead_conversion_date),
                             }
                         )
+                        print("SOURCE:", repr(sp.x_activitec))
+                        print("SAVED:", repr(recipient.x_activitec))
                         if created:
                             imported += 1
                         else:

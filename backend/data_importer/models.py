@@ -92,13 +92,13 @@ class SourcePartner(models.Model):
     x_ice = models.CharField(max_length=255, null=True, blank=True)
     x_source = models.CharField(max_length=255, null=True, blank=True)
     x_Capital = models.CharField(max_length=255, null=True, blank=True
-                                 ,db_column='x_capital'
+                                 ,db_column='x_Capital'
                                 )
     x_activitec = models.CharField(max_length=255, null=True, blank=True) # Category
     x_effectif = models.CharField(max_length=255, null=True, blank=True)
     x_forme_juridique = models.CharField(max_length=255, null=True, blank=True)
-    x_RC = models.CharField(max_length=255, null=True, blank=True,db_column="x_rc")
-    x_IF = models.CharField(max_length=255, null=True, blank=True, db_column="x_if")
+    x_RC = models.CharField(max_length=255, null=True, blank=True,db_column="x_RC")
+    x_IF = models.CharField(max_length=255, null=True, blank=True, db_column="x_IF")
 
     class Meta:
         managed = False

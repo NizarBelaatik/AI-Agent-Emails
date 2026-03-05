@@ -1,7 +1,7 @@
 // src/services/api.js - FIXED INTERCEPTOR
 import axios from 'axios';
 
-const API_BASE = '/api'//import.meta.env.VITE_API_URL || '/api';
+const API_BASE = import.meta.env.VITE_API_URL || '/api';
 //const API_BASE = import.meta.env.VITE_BACKEND_URL || 'http://192.168.1.39:8000';
 
 
