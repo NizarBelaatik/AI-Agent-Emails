@@ -26,7 +26,8 @@ urlpatterns = [
     # Available recipients from data_importer
     path('available-recipients/', views.AvailableRecipientsView.as_view(), name='available-recipients'),
     path('activities/', views.ActivitiesListView.as_view(), name='activities-list'),
-    
+    path('debug-activities/', views.DebugActivitiesView.as_view(), name='debug-activities'),
+
     # Debug
     path('debug-status/', views.DebugEmailStatusView.as_view(), name='debug-status'),
 ]

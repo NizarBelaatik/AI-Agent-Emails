@@ -21,13 +21,33 @@ const emailDispatcherAPI = {
   getActivities: async () => {
     try {
       const response = await api.get('/email-dispatcher/activities/');
-      return Array.isArray(response.data) ? response.data : [];
+      return response.data || []; // This will now return structured data
     } catch (error) {
       console.error('Error fetching activities:', error);
       return [];
     }
   },
-
+  
+  // In your emailDispatcherAPI service
+  getActivities: async () => {
+    try {
+      console.log('API: Calling /email-dispatcher/activities/');
+      const response = await api.get('/email-dispatcher/activities/');
+      console.log('API: Raw response:', response);
+      console.log('API: Response data:', response.data);
+      console.log('API: Response status:', response.status);
+      console.log('API: Response headers:', response.headers);
+      
+      return response.data || [];
+    } catch (error) {
+      console.error('API ERROR in getActivities:', error);
+      console.error('API Error response:', error.response);
+      console.error('API Error status:', error.response?.status);
+      console.error('API Error data:', error.response?.data);
+      console.error('API Error message:', error.message);
+      return [];
+    }
+  },
   // Create emails from selected recipients
   createEmails: async (data) => {
     try {

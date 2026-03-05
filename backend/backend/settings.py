@@ -140,8 +140,8 @@ DATABASES = {
 
     'source_db': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('SOURCE_DB_NAME', 'odoo_test_full'),
-        'USER': os.getenv('SOURCE_DB_USER', 'auto_mail_user'),
+        'NAME': os.getenv('SOURCE_DB_NAME', ''),#odoo_test_full
+        'USER': os.getenv('SOURCE_DB_USER', ''),#auto_mail_user
         'PASSWORD': os.getenv('SOURCE_DB_PASSWORD', 'odoo'),
         'HOST': os.getenv('SOURCE_DB_HOST', '192.168.1.39'),
         'PORT': os.getenv('SOURCE_DB_PORT', '5432'),

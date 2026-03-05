@@ -1,3 +1,4 @@
+// src/pages/EmailDispatcher.jsx
 import React, { useState, useEffect } from 'react';
 import {
   Mail, Send, Clock, Calendar, Settings, AlertCircle,
@@ -10,7 +11,6 @@ import Header from '../../components/Header';
 import Card from '../../components/Card';
 import Button from '../../components/Button';
 import emailDispatcherAPI from '../../services/emailDispatcherAPI';
-import api from '../../services/api';
 
 const EmailDispatcher = () => {
   const [activeTab, setActiveTab] = useState('compose'); // compose, pending, sent, batches
@@ -37,12 +37,31 @@ const EmailDispatcher = () => {
   
   // Filters
   const [search, setSearch] = useState('');
-  const [activityFilter, setActivityFilter] = useState('');
   const [cityFilter, setCityFilter] = useState('');
-  const [activities, setActivities] = useState([]);
+  
+  // Multi-select activity filters
+  const [selectedMainActivities, setSelectedMainActivities] = useState([]);
+  const [selectedSubActivities, setSelectedSubActivities] = useState(new Set());
+  const [activitySearchTerm, setActivitySearchTerm] = useState('');
+  const [subActivitySearchTerm, setSubActivitySearchTerm] = useState('');
+  const [showActivityDropdown, setShowActivityDropdown] = useState(false);
+  const [showSubActivityDropdown, setShowSubActivityDropdown] = useState(false);
+  
+  // Category structures
+  const [mainCategories, setMainCategories] = useState([]);
+  const [subCategories, setSubCategories] = useState([]);
+  const [allCategories, setAllCategories] = useState([]);
+  const [availableSubActivities, setAvailableSubActivities] = useState([]);
+  
+  // Display options for recipients
+  const [recipientDisplayOptions, setRecipientDisplayOptions] = useState({
+    showAll: false,
+    maxRows: 5000,
+    pageSizeOptions: [50, 100, 250, 500, 1000, 2500, 5000]
+  });
   
   // Sending settings
-  const [sendSpeed, setSendSpeed] = useState(50); // emails per hour
+  const [sendSpeed, setSendSpeed] = useState(3600); // emails per hour
   const [useTimeWindow, setUseTimeWindow] = useState(false);
   const [startTime, setStartTime] = useState('09:00');
   const [endTime, setEndTime] = useState('18:00');
@@ -52,6 +71,13 @@ const EmailDispatcher = () => {
   const [emails, setEmails] = useState([]);
   const [selectedEmails, setSelectedEmails] = useState(new Set());
   const [loadingEmails, setLoadingEmails] = useState(false);
+  
+  // Display options for emails
+  const [emailDisplayOptions, setEmailDisplayOptions] = useState({
+    showAll: false,
+    maxRows: 5000,
+    pageSizeOptions: [50, 100, 250, 500, 1000, 2500, 5000]
+  });
   
   // Batches - ensure it's always an array
   const [batches, setBatches] = useState([]);
@@ -77,12 +103,64 @@ const EmailDispatcher = () => {
     totalPages: 1,
   });
 
+  const [emailPagination, setEmailPagination] = useState({
+    page: 1,
+    pageSize: 50,
+    totalCount: 0,
+    totalPages: 1,
+  });
 
+  // Distribution settings
+  const [distributionMethod, setDistributionMethod] = useState('spread');
+  const [fixedDelaySeconds, setFixedDelaySeconds] = useState(1);
+
+  // Update available sub-activities when main activities change
+  useEffect(() => {
+    if (selectedMainActivities.length > 0) {
+      const subs = [];
+      selectedMainActivities.forEach(mainCat => {
+        const mainSubs = subCategories[mainCat] || [];
+        subs.push(...mainSubs);
+      });
+      setAvailableSubActivities([...new Set(subs)]);
+    } else {
+      setAvailableSubActivities([]);
+    }
+  }, [selectedMainActivities, subCategories]);
 
   // Refetch when filters change
   useEffect(() => {
     fetchRecipients();
-  }, [pagination.page, search, activityFilter, cityFilter]);
+  }, [pagination.page, pagination.pageSize, search, selectedMainActivities, selectedSubActivities, cityFilter, recipientDisplayOptions.showAll]);
+
+  useEffect(() => {
+    fetchCategories();
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'pending') {
+      fetchEmails();
+    } else if (activeTab === 'sent') {
+      fetchSentEmails();
+    }
+    if (activeTab === 'batches') {
+      fetchBatches();
+    }
+    fetchStats();
+    
+    // Refresh every 10 seconds
+    const interval = setInterval(() => {
+      if (activeTab === 'pending') {
+        fetchEmails();
+      } else if (activeTab === 'sent') {
+        fetchSentEmails();
+      }
+      fetchBatches();
+      fetchStats();
+    }, 10000);
+    
+    return () => clearInterval(interval);
+  }, [activeTab, emailPagination.page, emailPagination.pageSize, emailDisplayOptions.showAll]);
 
   const fetchRecipients = async () => {
     setLoadingRecipients(true);
@@ -90,19 +168,21 @@ const EmailDispatcher = () => {
     try {
       const params = {
         search: search || undefined,
-        x_activitec: activityFilter || undefined,
+        x_activitec: selectedMainActivities.length > 0 ? selectedMainActivities.join(',') : undefined,
+        sub_x_activitec: selectedSubActivities.size > 0 ? Array.from(selectedSubActivities).join(',') : undefined,
         city: cityFilter || undefined,
-        page: pagination.page,
-        page_size: pagination.pageSize,
+        page: recipientDisplayOptions.showAll ? 1 : pagination.page,
+        page_size: recipientDisplayOptions.showAll ? recipientDisplayOptions.maxRows : pagination.pageSize,
       };
       
       const data = await emailDispatcherAPI.getAvailableRecipients(params);
-      // Ensure data.results is an array
       setRecipients(Array.isArray(data.results) ? data.results : []);
       setPagination(prev => ({
         ...prev,
         totalCount: data.count || 0,
-        totalPages: Math.ceil((data.count || 0) / prev.pageSize) || 1,
+        totalPages: recipientDisplayOptions.showAll 
+          ? 1
+          : Math.ceil((data.count || 0) / prev.pageSize) || 1,
       }));
     } catch (err) {
       console.error('Error fetching recipients:', err);
@@ -113,53 +193,139 @@ const EmailDispatcher = () => {
     }
   };
 
-  const fetchActivities = async () => {
+  const fetchCategories = async () => {
     try {
+      console.log('=== fetchCategories started ===');
+      console.log('Calling API to get activities...');
+      
       const data = await emailDispatcherAPI.getActivities();
-      setActivities(Array.isArray(data) ? data : []);
+      
+      console.log('Raw API response:', data);
+      console.log('Data type:', typeof data);
+      console.log('Is array?', Array.isArray(data));
+      
+      if (data && typeof data === 'object') {
+        console.log('Data keys:', Object.keys(data));
+      }
+      
+      // Check if data has the new structure
+      if (data && data.main_categories && data.sub_categories) {
+        console.log('Using new structured data format');
+        console.log('Main categories:', data.main_categories);
+        console.log('Sub categories:', data.sub_categories);
+        
+        setMainCategories(data.main_categories || []);
+        setSubCategories(data.sub_categories || {});
+        setAllCategories(data.activities || []);
+        
+        console.log('State updated with structured data');
+      } else if (Array.isArray(data)) {
+        console.log('Using array format (fallback)');
+        console.log('Activities array length:', data.length);
+        console.log('First 10 activities:', data.slice(0, 10));
+        
+        setAllCategories(data);
+        
+        const mainCats = new Set();
+        const subCatsByMain = {};
+        
+        data.forEach((cat, index) => {
+          if (cat && typeof cat === 'string') {
+            if (cat.includes('/')) {
+              const [main, sub] = cat.split('/').map(s => s.trim());
+              mainCats.add(main);
+              
+              if (!subCatsByMain[main]) {
+                subCatsByMain[main] = [];
+              }
+              if (!subCatsByMain[main].includes(cat)) {
+                subCatsByMain[main].push(cat);
+              }
+            } else {
+              mainCats.add(cat);
+              if (!subCatsByMain[cat]) {
+                subCatsByMain[cat] = [];
+              }
+            }
+          }
+        });
+        
+        const mainCategoriesArray = Array.from(mainCats).sort();
+        console.log('Parsed main categories:', mainCategoriesArray);
+        console.log('Parsed sub categories:', subCatsByMain);
+        
+        setMainCategories(mainCategoriesArray);
+        setSubCategories(subCatsByMain);
+        
+        console.log('State updated with parsed array data');
+      } else {
+        console.warn('Unexpected data format:', data);
+        setAllCategories([]);
+        setMainCategories([]);
+        setSubCategories({});
+      }
+      
+      console.log('=== fetchCategories completed ===');
     } catch (err) {
-      console.error('Error fetching activities:', err);
-      setActivities([]);
+      console.error('ERROR in fetchCategories:', err);
+      console.error('Error details:', err.message);
+      console.error('Error stack:', err.stack);
+      
+      setAllCategories([]);
+      setMainCategories([]);
+      setSubCategories({});
     }
   };
-
 
   const fetchEmails = async () => {
     try {
-      const params = {};
-      
-      // This will now work correctly because activeTab is in the dependency array
-      if (activeTab === 'sent') {
-        params.include_sent = 'true';
-        params.status = 'sent';
-      }
+      setLoadingEmails(true);
+      const params = {
+        page: emailDisplayOptions.showAll ? 1 : emailPagination.page,
+        page_size: emailDisplayOptions.showAll ? emailDisplayOptions.maxRows : emailPagination.pageSize,
+      };
       
       const data = await emailDispatcherAPI.getEmails(params);
       setEmails(Array.isArray(data.results) ? data.results : []);
+      setEmailPagination(prev => ({
+        ...prev,
+        totalCount: data.count || 0,
+        totalPages: emailDisplayOptions.showAll
+          ? 1
+          : Math.ceil((data.count || 0) / prev.pageSize) || 1,
+      }));
     } catch (err) {
       console.error('Error fetching emails:', err);
       setEmails([]);
+    } finally {
+      setLoadingEmails(false);
     }
   };
 
-  // Also update the refresh interval
-  useEffect(() => {
-    fetchRecipients();
-    fetchActivities();
-    fetchEmails(); // This will now use the correct endpoint based on activeTab
-    fetchBatches();
-    fetchStats();
-    
-    // Refresh every 10 seconds
-    const interval = setInterval(() => {
-      fetchEmails(); // Use correct endpoint based on activeTab
-      fetchBatches();
-      fetchStats();
-    }, 10000);
-    
-    return () => clearInterval(interval);
-  }, [activeTab]); // Add activeTab as dependency
-
+  const fetchSentEmails = async () => {
+    try {
+      setLoadingEmails(true);
+      const params = {
+        page: emailDisplayOptions.showAll ? 1 : emailPagination.page,
+        page_size: emailDisplayOptions.showAll ? emailDisplayOptions.maxRows : emailPagination.pageSize,
+      };
+      
+      const data = await emailDispatcherAPI.getSentEmails(params);
+      setEmails(Array.isArray(data.results) ? data.results : []);
+      setEmailPagination(prev => ({
+        ...prev,
+        totalCount: data.count || 0,
+        totalPages: emailDisplayOptions.showAll
+          ? 1
+          : Math.ceil((data.count || 0) / prev.pageSize) || 1,
+      }));
+    } catch (err) {
+      console.error('Error fetching sent emails:', err);
+      setEmails([]);
+    } finally {
+      setLoadingEmails(false);
+    }
+  };
 
   const fetchBatches = async () => {
     try {
@@ -167,7 +333,6 @@ const EmailDispatcher = () => {
       const batchesArray = Array.isArray(data) ? data : [];
       setBatches(batchesArray);
       
-      // Check for active batch
       const active = batchesArray.find(b => b && b.status === 'sending');
       setActiveBatch(active || null);
     } catch (err) {
@@ -186,6 +351,14 @@ const EmailDispatcher = () => {
     } catch (err) {
       console.error('Error fetching stats:', err);
     }
+  };
+
+  const clearAllFilters = () => {
+    setSelectedMainActivities([]);
+    setSelectedSubActivities(new Set());
+    setCityFilter('');
+    setSearch('');
+    setPagination(prev => ({ ...prev, page: 1 }));
   };
 
   const toggleAllRecipients = () => {
@@ -256,8 +429,8 @@ const EmailDispatcher = () => {
       const data = {
         recipient_ids: Array.from(selectedRecipients),
         subject,
-        body_html: bodyHtml, // Optional
-        body_text: bodyText, // Required
+        body_html: bodyHtml,
+        body_text: bodyText,
         from_email: fromEmail,
         from_name: fromName,
         reply_to: replyTo,
@@ -274,9 +447,8 @@ const EmailDispatcher = () => {
         setBodyText('');
         setBodyHtml('');
         
-        // Wait a moment then refresh
         setTimeout(() => {
-          fetchEmails();  // Refresh the email list
+          fetchEmails();
           fetchStats();
         }, 1000);
       } else {
@@ -368,14 +540,62 @@ const EmailDispatcher = () => {
     return badges[status] || badges.pending;
   };
 
-  // Safely check if we have recipients
+  const formatCategory = (category) => {
+    if (!category) return 'Général';
+    if (category.includes('/')) {
+      const [main, sub] = category.split('/').map(s => s.trim());
+      return (
+        <div className="flex flex-col">
+          <span className="text-xs font-medium text-gray-900">{main}</span>
+          <span className="text-xs text-gray-500">{sub}</span>
+        </div>
+      );
+    }
+    return <span className="text-xs text-gray-700">{category}</span>;
+  };
+
   const hasRecipients = Array.isArray(recipients) && recipients.length > 0;
   const hasEmails = Array.isArray(emails) && emails.length > 0;
 
+  const toggleRecipientDisplayMode = (showAll) => {
+    setRecipientDisplayOptions(prev => ({ ...prev, showAll }));
+    setPagination(prev => ({ ...prev, page: 1 }));
+    fetchRecipients();
+  };
 
-  const [distributionMethod, setDistributionMethod] = useState('spread');
-  const [fixedDelaySeconds, setFixedDelaySeconds] = useState(1);
+  const changeRecipientPageSize = (newSize) => {
+    setPagination(prev => ({ 
+      ...prev, 
+      pageSize: newSize,
+      page: 1
+    }));
+    setRecipientDisplayOptions(prev => ({ ...prev, showAll: false }));
+    fetchRecipients();
+  };
 
+  const toggleEmailDisplayMode = (showAll) => {
+    setEmailDisplayOptions(prev => ({ ...prev, showAll }));
+    setEmailPagination(prev => ({ ...prev, page: 1 }));
+    if (activeTab === 'sent') {
+      fetchSentEmails();
+    } else {
+      fetchEmails();
+    }
+  };
+
+  const changeEmailPageSize = (newSize) => {
+    setEmailPagination(prev => ({ 
+      ...prev, 
+      pageSize: newSize,
+      page: 1
+    }));
+    setEmailDisplayOptions(prev => ({ ...prev, showAll: false }));
+    if (activeTab === 'sent') {
+      fetchSentEmails();
+    } else {
+      fetchEmails();
+    }
+  };
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-8">
@@ -732,8 +952,8 @@ L'équipe"
           </Card>
 
           {/* Recipient Selection */}
-          <Card>
-            <div className="flex justify-between items-center mb-4">
+          <Card className="overflow-hidden border-0 shadow-xl flex flex-col" style={{ height: 'calc(100vh - 400px)' }}>
+            <div className="flex justify-between items-center p-4 border-b bg-gray-50">
               <h3 className="text-lg font-semibold">Sélectionner les destinataires</h3>
               <div className="flex items-center gap-2">
                 <Button
@@ -749,51 +969,351 @@ L'équipe"
             </div>
 
             {/* Filters */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-                <input
-                  type="text"
-                  placeholder="Rechercher..."
-                  value={search}
-                  onChange={(e) => {
-                    setSearch(e.target.value);
-                    setPagination(prev => ({ ...prev, page: 1 }));
-                  }}
-                  className="w-full pl-10 pr-4 py-2 border rounded-lg"
-                />
+            <div className="p-4 border-b bg-white">
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+                {/* Search box - takes 3 columns */}
+                <div className="relative md:col-span-3">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                  <input
+                    type="text"
+                    placeholder="Rechercher par nom, email, entreprise..."
+                    value={search}
+                    onChange={(e) => {
+                      setSearch(e.target.value);
+                      setPagination(prev => ({ ...prev, page: 1 }));
+                    }}
+                    className="w-full pl-10 pr-4 py-2 border rounded-lg"
+                  />
+                </div>
+                
+                {/* Main Activity Multi-Select with Search - takes 3 columns */}
+                <div className="relative md:col-span-3">
+                  <div 
+                    className="w-full px-3 py-2 border rounded-lg cursor-pointer flex items-center justify-between bg-white"
+                    onClick={() => setShowActivityDropdown(!showActivityDropdown)}
+                  >
+                    <span className="truncate">
+                      {selectedMainActivities.length === 0 
+                        ? 'Sélectionner activités principales' 
+                        : `${selectedMainActivities.length} activité(s) principale(s) sélectionnée(s)`}
+                    </span>
+                    <ChevronDown size={18} className={`transform transition-transform ${showActivityDropdown ? 'rotate-180' : ''}`} />
+                  </div>
+                  
+                  {showActivityDropdown && (
+                    <div className="absolute z-50 mt-1 w-full bg-white border rounded-lg shadow-lg max-h-80 overflow-hidden">
+                      {/* Search inside dropdown */}
+                      <div className="p-2 border-b sticky top-0 bg-white">
+                        <div className="relative">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                          <input
+                            type="text"
+                            placeholder="Rechercher activité..."
+                            value={activitySearchTerm}
+                            onChange={(e) => setActivitySearchTerm(e.target.value)}
+                            className="w-full pl-8 pr-4 py-2 border rounded-lg text-sm"
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        </div>
+                      </div>
+                      
+                      {/* Options list */}
+                      <div className="overflow-y-auto max-h-60">
+                        {mainCategories
+                          .filter(cat => cat.toLowerCase().includes(activitySearchTerm.toLowerCase()))
+                          .map(cat => (
+                            <label 
+                              key={cat} 
+                              className="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selectedMainActivities.includes(cat)}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    const newSelected = [...selectedMainActivities, cat];
+                                    setSelectedMainActivities(newSelected);
+                                  } else {
+                                    const newSelected = selectedMainActivities.filter(c => c !== cat);
+                                    setSelectedMainActivities(newSelected);
+                                  }
+                                  setPagination(prev => ({ ...prev, page: 1 }));
+                                }}
+                                className="rounded border-gray-300 text-indigo-600"
+                              />
+                              <span className="text-sm">{cat}</span>
+                              <span className="text-xs text-gray-500 ml-auto">
+                                ({subCategories[cat]?.length || 0})
+                              </span>
+                            </label>
+                          ))}
+                          
+                        {mainCategories.filter(cat => cat.toLowerCase().includes(activitySearchTerm.toLowerCase())).length === 0 && (
+                          <div className="px-3 py-4 text-sm text-gray-500 text-center">
+                            Aucune activité trouvée
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                
+                {/* Sub Activity Multi-Select with Search - takes 3 columns */}
+                <div className="relative md:col-span-3">
+                  <div 
+                    className={`w-full px-3 py-2 border rounded-lg cursor-pointer flex items-center justify-between bg-white ${
+                      selectedMainActivities.length === 0 ? 'opacity-50 cursor-not-allowed' : ''
+                    }`}
+                    onClick={() => selectedMainActivities.length > 0 && setShowSubActivityDropdown(!showSubActivityDropdown)}
+                  >
+                    <span className="truncate">
+                      {selectedMainActivities.length === 0 
+                        ? 'Sélectionnez d\'abord une activité principale'
+                        : availableSubActivities.length === 0
+                        ? 'Aucune sous-activité disponible'
+                        : `${selectedSubActivities.size} sous-activité(s) sélectionnée(s)`}
+                    </span>
+                    {selectedMainActivities.length > 0 && (
+                      <ChevronDown size={18} className={`transform transition-transform ${showSubActivityDropdown ? 'rotate-180' : ''}`} />
+                    )}
+                  </div>
+                  
+                  {showSubActivityDropdown && selectedMainActivities.length > 0 && (
+                    <div className="absolute z-50 mt-1 w-full bg-white border rounded-lg shadow-lg max-h-80 overflow-hidden">
+                      {/* Search inside dropdown */}
+                      <div className="p-2 border-b sticky top-0 bg-white">
+                        <div className="relative">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                          <input
+                            type="text"
+                            placeholder="Rechercher sous-activité..."
+                            value={subActivitySearchTerm}
+                            onChange={(e) => setSubActivitySearchTerm(e.target.value)}
+                            className="w-full pl-8 pr-4 py-2 border rounded-lg text-sm"
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        </div>
+                      </div>
+                      
+                      {/* Options list */}
+                      <div className="overflow-y-auto max-h-60">
+                        {/* Quick select all/none */}
+                        {availableSubActivities.length > 0 && (
+                          <div className="px-3 py-2 border-b bg-gray-50 flex gap-2 text-xs">
+                            <button
+                              onClick={() => {
+                                setSelectedSubActivities(new Set(availableSubActivities));
+                                setPagination(prev => ({ ...prev, page: 1 }));
+                              }}
+                              className="text-indigo-600 hover:text-indigo-800"
+                            >
+                              Tout sélectionner
+                            </button>
+                            <span className="text-gray-300">|</span>
+                            <button
+                              onClick={() => {
+                                setSelectedSubActivities(new Set());
+                                setPagination(prev => ({ ...prev, page: 1 }));
+                              }}
+                              className="text-indigo-600 hover:text-indigo-800"
+                            >
+                              Tout désélectionner
+                            </button>
+                          </div>
+                        )}
+                        
+                        {availableSubActivities
+                          .filter(sub => sub.toLowerCase().includes(subActivitySearchTerm.toLowerCase()))
+                          .map(sub => (
+                            <label 
+                              key={sub} 
+                              className="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selectedSubActivities.has(sub)}
+                                onChange={(e) => {
+                                  const newSet = new Set(selectedSubActivities);
+                                  if (e.target.checked) {
+                                    newSet.add(sub);
+                                  } else {
+                                    newSet.delete(sub);
+                                  }
+                                  setSelectedSubActivities(newSet);
+                                  setPagination(prev => ({ ...prev, page: 1 }));
+                                }}
+                                className="rounded border-gray-300 text-indigo-600"
+                              />
+                              <span className="text-sm">{sub.split('/').pop().trim()}</span>
+                              <span className="text-xs text-gray-400 ml-2 truncate">{sub}</span>
+                            </label>
+                          ))}
+                          
+                        {availableSubActivities.filter(sub => sub.toLowerCase().includes(subActivitySearchTerm.toLowerCase())).length === 0 && (
+                          <div className="px-3 py-4 text-sm text-gray-500 text-center">
+                            Aucune sous-activité trouvée
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                
+                {/* City filter - takes 2 columns */}
+                <div className="relative md:col-span-2">
+                  <input
+                    type="text"
+                    placeholder="Ville..."
+                    value={cityFilter}
+                    onChange={(e) => {
+                      setCityFilter(e.target.value);
+                      setPagination(prev => ({ ...prev, page: 1 }));
+                    }}
+                    className="w-full px-3 py-2 border rounded-lg"
+                  />
+                </div>
+                
+                {/* Display Options Dropdown - takes 1 column */}
+                <div className="md:col-span-1">
+                  <select
+                    value={recipientDisplayOptions.showAll ? 'all' : pagination.pageSize}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      if (value === 'all') {
+                        toggleRecipientDisplayMode(true);
+                      } else {
+                        changeRecipientPageSize(parseInt(value));
+                      }
+                    }}
+                    className="w-full px-3 py-2 border rounded-lg bg-white cursor-pointer"
+                  >
+                    <optgroup label="Pages">
+                      {recipientDisplayOptions.pageSizeOptions.map(size => (
+                        <option key={size} value={size}>
+                          {size}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Mode spécial">
+                      <option value="all">Tout</option>
+                    </optgroup>
+                  </select>
+                </div>
               </div>
-              
-              <select
-                value={activityFilter}
-                onChange={(e) => {
-                  setActivityFilter(e.target.value);
-                  setPagination(prev => ({ ...prev, page: 1 }));
-                }}
-                className="px-3 py-2 border rounded-lg"
-              >
-                <option value="">Toutes activités</option>
-                {Array.isArray(activities) && activities.map(act => (
-                  <option key={act} value={act}>{act}</option>
-                ))}
-              </select>
-              
-              <input
-                type="text"
-                placeholder="Ville..."
-                value={cityFilter}
-                onChange={(e) => {
-                  setCityFilter(e.target.value);
-                  setPagination(prev => ({ ...prev, page: 1 }));
-                }}
-                className="px-3 py-2 border rounded-lg"
-              />
+
+              {/* Selected filters summary */}
+              {(selectedMainActivities.length > 0 || selectedSubActivities.size > 0 || cityFilter || search) && (
+                <div className="mt-3 flex flex-wrap items-center gap-2 bg-indigo-50 px-4 py-2 rounded-lg border border-indigo-200">
+                  <Filter size={16} className="text-indigo-600" />
+                  <span className="text-sm text-indigo-700 font-medium">Filtres actifs:</span>
+                  
+                  {search && (
+                    <span className="inline-flex items-center gap-1 px-2 py-1 bg-indigo-100 text-indigo-800 rounded-full text-xs">
+                      Recherche: {search}
+                      <button
+                        onClick={() => {
+                          setSearch('');
+                          setPagination(prev => ({ ...prev, page: 1 }));
+                        }}
+                        className="hover:bg-indigo-200 rounded-full p-0.5"
+                      >
+                        <X size={12} />
+                      </button>
+                    </span>
+                  )}
+                  
+                  {selectedMainActivities.map(act => (
+                    <span 
+                      key={act}
+                      className="inline-flex items-center gap-1 px-2 py-1 bg-indigo-100 text-indigo-800 rounded-full text-xs"
+                    >
+                      {act}
+                      <button
+                        onClick={() => {
+                          const newSelected = selectedMainActivities.filter(a => a !== act);
+                          setSelectedMainActivities(newSelected);
+                          setPagination(prev => ({ ...prev, page: 1 }));
+                        }}
+                        className="hover:bg-indigo-200 rounded-full p-0.5"
+                      >
+                        <X size={12} />
+                      </button>
+                    </span>
+                  ))}
+                  
+                  {Array.from(selectedSubActivities).map(sub => (
+                    <span 
+                      key={sub}
+                      className="inline-flex items-center gap-1 px-2 py-1 bg-indigo-100 text-indigo-800 rounded-full text-xs"
+                    >
+                      {sub.split('/').pop().trim()}
+                      <button
+                        onClick={() => {
+                          const newSet = new Set(selectedSubActivities);
+                          newSet.delete(sub);
+                          setSelectedSubActivities(newSet);
+                          setPagination(prev => ({ ...prev, page: 1 }));
+                        }}
+                        className="hover:bg-indigo-200 rounded-full p-0.5"
+                      >
+                        <X size={12} />
+                      </button>
+                    </span>
+                  ))}
+                  
+                  {cityFilter && (
+                    <span className="inline-flex items-center gap-1 px-2 py-1 bg-indigo-100 text-indigo-800 rounded-full text-xs">
+                      Ville: {cityFilter}
+                      <button
+                        onClick={() => {
+                          setCityFilter('');
+                          setPagination(prev => ({ ...prev, page: 1 }));
+                        }}
+                        className="hover:bg-indigo-200 rounded-full p-0.5"
+                      >
+                        <X size={12} />
+                      </button>
+                    </span>
+                  )}
+                  
+                  <button
+                    onClick={clearAllFilters}
+                    className="ml-auto text-xs text-red-600 hover:text-red-800 flex items-center gap-1"
+                  >
+                    <X size={14} />
+                    Effacer tout
+                  </button>
+                </div>
+              )}
+
+              {/* Show indicator when in "show all" mode */}
+              {recipientDisplayOptions.showAll && (
+                <div className="mt-3 flex items-center gap-2 bg-indigo-50 px-4 py-2 rounded-lg border border-indigo-200">
+                  <Eye size={16} className="text-indigo-600" />
+                  <span className="text-sm text-indigo-700">
+                    Affichage de tous les résultats
+                  </span>
+                  <button
+                    onClick={() => {
+                      setRecipientDisplayOptions(prev => ({ ...prev, showAll: false }));
+                      setPagination(prev => ({ ...prev, pageSize: 50, page: 1 }));
+                      fetchRecipients();
+                    }}
+                    className="ml-2 p-1 hover:bg-indigo-200 rounded-lg transition-colors"
+                    title="Revenir au mode paginé"
+                  >
+                    <X size={14} className="text-indigo-600" />
+                  </button>
+                </div>
+              )}
             </div>
 
-            {/* Recipients Table */}
-            <div className="overflow-x-auto">
+            {/* Scrollable Recipients Table */}
+            <div className="flex-1 overflow-auto">
               <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
+                <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
                   <tr>
                     <th className="px-6 py-3 w-12">
                       <input
@@ -826,7 +1346,7 @@ L'équipe"
                     </tr>
                   ) : (
                     recipients
-                      .filter(r => r && !r.already_used)  // ← Add this filter to exclude already used
+                      .filter(r => r && !r.already_used)
                       .map(r => (
                         <tr key={r.id} className="hover:bg-gray-50">
                           <td className="px-6 py-4">
@@ -846,9 +1366,7 @@ L'équipe"
                           <td className="px-6 py-4 text-gray-600">{r.email || '—'}</td>
                           <td className="px-6 py-4 text-gray-600">{r.city || '—'}</td>
                           <td className="px-6 py-4">
-                            <span className="px-2 py-1 text-xs rounded-full bg-gray-100 text-gray-800">
-                              {r.x_activitec || 'Général'}
-                            </span>
+                            {formatCategory(r.x_activitec)}
                           </td>
                           <td className="px-6 py-4">
                             <span className="text-xs text-green-600">Disponible</span>
@@ -860,40 +1378,55 @@ L'équipe"
               </table>
             </div>
 
-            {/* Pagination */}
-<div className="flex justify-between items-center px-6 py-4 border-t">
-  <div className="text-sm text-gray-600">
-    {recipients.filter(r => !r.already_used).length} sur {pagination.totalCount || 0} destinataires disponibles
-  </div>
-  <div className="flex gap-2">
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={() => setPagination(prev => ({ ...prev, page: prev.page - 1 }))}
-      disabled={pagination.page === 1 || loadingRecipients}
-    >
-      <ChevronLeft size={16} />
-    </Button>
-    <span className="px-4 py-2 text-sm">
-      Page {pagination.page} / {Math.max(pagination.totalPages, 1)}
-    </span>
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={() => setPagination(prev => ({ ...prev, page: prev.page + 1 }))}
-      disabled={pagination.page >= pagination.totalPages || loadingRecipients}
-    >
-      <ChevronRight size={16} />
-    </Button>
-  </div>
-</div>
+            {/* Pagination - Only show when not in "show all" mode */}
+            {!recipientDisplayOptions.showAll && (
+              <div className="flex justify-between items-center px-6 py-4 border-t bg-gray-50">
+                <div className="text-sm text-gray-600">
+                  {recipients.filter(r => !r.already_used).length} sur {pagination.totalCount || 0} destinataires disponibles
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPagination(prev => ({ ...prev, page: prev.page - 1 }))}
+                    disabled={pagination.page === 1 || loadingRecipients}
+                  >
+                    <ChevronLeft size={16} />
+                  </Button>
+                  <span className="px-4 py-2 text-sm">
+                    Page {pagination.page} / {Math.max(pagination.totalPages, 1)}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPagination(prev => ({ ...prev, page: prev.page + 1 }))}
+                    disabled={pagination.page >= pagination.totalPages || loadingRecipients}
+                  >
+                    <ChevronRight size={16} />
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Summary when showing all */}
+            {recipientDisplayOptions.showAll && (
+              <div className="px-6 py-4 border-t bg-gray-50 text-sm text-gray-700">
+                Affichage de <span className="font-medium">{recipients.filter(r => !r.already_used).length}</span> résultats sur{' '}
+                <span className="font-medium">{pagination.totalCount.toLocaleString()}</span> au total
+                {recipients.filter(r => !r.already_used).length >= recipientDisplayOptions.maxRows && (
+                  <span className="ml-2 text-amber-600">
+                    (limité à {recipientDisplayOptions.maxRows} lignes)
+                  </span>
+                )}
+              </div>
+            )}
           </Card>
         </>
       )}
 
       {/* PENDING TAB */}
       {activeTab === 'pending' && (
-        <Card>
+        <Card className="overflow-hidden border-0 shadow-xl flex flex-col" style={{ height: 'calc(100vh - 300px)' }}>
           <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
             <div className="flex items-center gap-4">
               <span className="text-sm font-medium">
@@ -905,6 +1438,31 @@ L'équipe"
             </div>
 
             <div className="flex items-center gap-4">
+              {/* Display Options Dropdown for emails */}
+              <select
+                value={emailDisplayOptions.showAll ? 'all' : emailPagination.pageSize}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  if (value === 'all') {
+                    toggleEmailDisplayMode(true);
+                  } else {
+                    changeEmailPageSize(parseInt(value));
+                  }
+                }}
+                className="px-3 py-2 border rounded-lg bg-white cursor-pointer text-sm"
+              >
+                <optgroup label="Pages">
+                  {emailDisplayOptions.pageSizeOptions.map(size => (
+                    <option key={size} value={size}>
+                      {size} par page
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="Mode spécial">
+                  <option value="all">Tout afficher (max {emailDisplayOptions.maxRows})</option>
+                </optgroup>
+              </select>
+
               {/* Sending Settings */}
               <div className="flex items-center gap-2 flex-wrap">
                 <select
@@ -948,7 +1506,6 @@ L'équipe"
                       className="px-2 py-2 border rounded-lg text-sm"
                     />
                     
-                    {/* Distribution method */}
                     <select
                       value={distributionMethod}
                       onChange={(e) => setDistributionMethod(e.target.value)}
@@ -972,7 +1529,6 @@ L'équipe"
                   </>
                 )}
                 
-                {/* Show estimate */}
                 {selectedEmails.size > 0 && (
                   <span className="text-sm text-gray-600">
                     ~{Math.ceil(selectedEmails.size / (sendSpeed || 3600) * 60)} min
@@ -992,9 +1548,31 @@ L'équipe"
             </div>
           </div>
 
-          <div className="overflow-x-auto">
+          {/* Show indicator when in "show all" mode for emails */}
+          {emailDisplayOptions.showAll && (
+            <div className="p-4 border-b bg-indigo-50 flex items-center gap-2">
+              <Eye size={16} className="text-indigo-600" />
+              <span className="text-sm text-indigo-700">
+                Affichage de tous les résultats
+              </span>
+              <button
+                onClick={() => {
+                  setEmailDisplayOptions(prev => ({ ...prev, showAll: false }));
+                  setEmailPagination(prev => ({ ...prev, pageSize: 50, page: 1 }));
+                  fetchEmails();
+                }}
+                className="ml-2 p-1 hover:bg-indigo-200 rounded-lg transition-colors"
+                title="Revenir au mode paginé"
+              >
+                <X size={14} className="text-indigo-600" />
+              </button>
+            </div>
+          )}
+
+          {/* Scrollable Emails Table */}
+          <div className="flex-1 overflow-auto">
             <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
+              <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
                 <tr>
                   <th className="px-6 py-3 w-12">
                     <input
@@ -1012,7 +1590,13 @@ L'équipe"
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {!hasEmails ? (
+                {loadingEmails ? (
+                  <tr>
+                    <td colSpan="6" className="px-6 py-12 text-center">
+                      <Loader2 className="animate-spin h-8 w-8 mx-auto text-indigo-600" />
+                    </td>
+                  </tr>
+                ) : !hasEmails ? (
                   <tr>
                     <td colSpan="6" className="px-6 py-12 text-center text-gray-500">
                       Aucun email en attente
@@ -1053,18 +1637,108 @@ L'équipe"
               </tbody>
             </table>
           </div>
+
+          {/* Pagination - Only show when not in "show all" mode */}
+          {!emailDisplayOptions.showAll && (
+            <div className="flex justify-between items-center px-6 py-4 border-t bg-gray-50">
+              <div className="text-sm text-gray-600">
+                {emails.filter(e => ['pending', 'queued'].includes(e.status)).length} sur {emailPagination.totalCount || 0} emails en attente
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEmailPagination(prev => ({ ...prev, page: prev.page - 1 }))}
+                  disabled={emailPagination.page === 1 || loadingEmails}
+                >
+                  <ChevronLeft size={16} />
+                </Button>
+                <span className="px-4 py-2 text-sm">
+                  Page {emailPagination.page} / {Math.max(emailPagination.totalPages, 1)}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEmailPagination(prev => ({ ...prev, page: prev.page + 1 }))}
+                  disabled={emailPagination.page >= emailPagination.totalPages || loadingEmails}
+                >
+                  <ChevronRight size={16} />
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Summary when showing all */}
+          {emailDisplayOptions.showAll && (
+            <div className="px-6 py-4 border-t bg-gray-50 text-sm text-gray-700">
+              Affichage de <span className="font-medium">{emails.filter(e => ['pending', 'queued'].includes(e.status)).length}</span> résultats sur{' '}
+              <span className="font-medium">{emailPagination.totalCount.toLocaleString()}</span> au total
+              {emails.length >= emailDisplayOptions.maxRows && (
+                <span className="ml-2 text-amber-600">
+                  (limité à {emailDisplayOptions.maxRows} lignes)
+                </span>
+              )}
+            </div>
+          )}
         </Card>
       )}
 
       {/* SENT TAB */}
       {activeTab === 'sent' && (
-        <Card>
-          <div className="p-4 border-b bg-gray-50">
+        <Card className="overflow-hidden border-0 shadow-xl flex flex-col" style={{ height: 'calc(100vh - 300px)' }}>
+          <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
             <h3 className="font-semibold">Emails envoyés</h3>
+            
+            <select
+              value={emailDisplayOptions.showAll ? 'all' : emailPagination.pageSize}
+              onChange={(e) => {
+                const value = e.target.value;
+                if (value === 'all') {
+                  toggleEmailDisplayMode(true);
+                } else {
+                  changeEmailPageSize(parseInt(value));
+                }
+              }}
+              className="px-3 py-2 border rounded-lg bg-white cursor-pointer text-sm"
+            >
+              <optgroup label="Pages">
+                {emailDisplayOptions.pageSizeOptions.map(size => (
+                  <option key={size} value={size}>
+                    {size} par page
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label="Mode spécial">
+                <option value="all">Tout afficher (max {emailDisplayOptions.maxRows})</option>
+              </optgroup>
+            </select>
           </div>
-          <div className="overflow-x-auto">
+
+          {/* Show indicator when in "show all" mode */}
+          {emailDisplayOptions.showAll && (
+            <div className="p-4 border-b bg-indigo-50 flex items-center gap-2">
+              <Eye size={16} className="text-indigo-600" />
+              <span className="text-sm text-indigo-700">
+                Affichage de tous les résultats
+              </span>
+              <button
+                onClick={() => {
+                  setEmailDisplayOptions(prev => ({ ...prev, showAll: false }));
+                  setEmailPagination(prev => ({ ...prev, pageSize: 50, page: 1 }));
+                  fetchSentEmails();
+                }}
+                className="ml-2 p-1 hover:bg-indigo-200 rounded-lg transition-colors"
+                title="Revenir au mode paginé"
+              >
+                <X size={14} className="text-indigo-600" />
+              </button>
+            </div>
+          )}
+
+          {/* Scrollable Sent Emails Table */}
+          <div className="flex-1 overflow-auto">
             <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
+              <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Destinataire</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Email</th>
@@ -1074,7 +1748,13 @@ L'équipe"
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {!hasEmails ? (
+                {loadingEmails ? (
+                  <tr>
+                    <td colSpan="5" className="px-6 py-12 text-center">
+                      <Loader2 className="animate-spin h-8 w-8 mx-auto text-indigo-600" />
+                    </td>
+                  </tr>
+                ) : !hasEmails ? (
                   <tr>
                     <td colSpan="5" className="px-6 py-12 text-center text-gray-500">
                       Aucun email envoyé
@@ -1082,7 +1762,7 @@ L'équipe"
                   </tr>
                 ) : (
                   emails
-                    .filter(e => e && e.status === 'sent')  // Filter to only show sent emails
+                    .filter(e => e && e.status === 'sent')
                     .map(email => (
                       <tr key={email.id} className="hover:bg-gray-50">
                         <td className="px-6 py-4 font-medium">{email.recipient_name || 'Inconnu'}</td>
@@ -1103,16 +1783,59 @@ L'équipe"
               </tbody>
             </table>
           </div>
+
+          {/* Pagination - Only show when not in "show all" mode */}
+          {!emailDisplayOptions.showAll && (
+            <div className="flex justify-between items-center px-6 py-4 border-t bg-gray-50">
+              <div className="text-sm text-gray-600">
+                {emails.filter(e => e.status === 'sent').length} sur {emailPagination.totalCount || 0} emails envoyés
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEmailPagination(prev => ({ ...prev, page: prev.page - 1 }))}
+                  disabled={emailPagination.page === 1 || loadingEmails}
+                >
+                  <ChevronLeft size={16} />
+                </Button>
+                <span className="px-4 py-2 text-sm">
+                  Page {emailPagination.page} / {Math.max(emailPagination.totalPages, 1)}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEmailPagination(prev => ({ ...prev, page: prev.page + 1 }))}
+                  disabled={emailPagination.page >= emailPagination.totalPages || loadingEmails}
+                >
+                  <ChevronRight size={16} />
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Summary when showing all */}
+          {emailDisplayOptions.showAll && (
+            <div className="px-6 py-4 border-t bg-gray-50 text-sm text-gray-700">
+              Affichage de <span className="font-medium">{emails.filter(e => e.status === 'sent').length}</span> résultats sur{' '}
+              <span className="font-medium">{emailPagination.totalCount.toLocaleString()}</span> au total
+              {emails.length >= emailDisplayOptions.maxRows && (
+                <span className="ml-2 text-amber-600">
+                  (limité à {emailDisplayOptions.maxRows} lignes)
+                </span>
+              )}
+            </div>
+          )}
         </Card>
       )}
 
       {/* BATCHES TAB */}
       {activeTab === 'batches' && (
-        <Card>
+        <Card className="overflow-hidden border-0 shadow-xl">
           <div className="p-4 border-b bg-gray-50">
             <h3 className="font-semibold">Historique des envois</h3>
           </div>
-          <div className="divide-y">
+          <div className="divide-y max-h-[600px] overflow-y-auto">
             {!Array.isArray(batches) || batches.length === 0 ? (
               <div className="p-8 text-center text-gray-500">
                 Aucun lot d'envoi

@@ -425,6 +425,7 @@ class AvailableRecipientsView(APIView):
             # Basic filters
             search = request.query_params.get('search', '').strip()
             x_activitec = request.query_params.get('x_activitec', '').strip()
+            sub_x_activitec = request.query_params.get('sub_x_activitec', '').strip()
             city = request.query_params.get('city', '').strip()
             
             if search:
@@ -435,8 +436,24 @@ class AvailableRecipientsView(APIView):
                     Q(company_name__icontains=search)
                 )
             
+            # Handle main activities filter
             if x_activitec:
-                queryset = queryset.filter(x_activitec=x_activitec)
+                main_cats = [cat.strip() for cat in x_activitec.split(',') if cat.strip()]
+                if main_cats:
+                    main_query = Q()
+                    for cat in main_cats:
+                        # Match main categories (exact match or those that start with this category)
+                        main_query |= Q(x_activitec=cat) | Q(x_activitec__startswith=f"{cat}/")
+                    queryset = queryset.filter(main_query)
+            
+            # Handle sub activities filter
+            if sub_x_activitec:
+                sub_cats = [cat.strip() for cat in sub_x_activitec.split('/') if cat.strip()]
+                if sub_cats:
+                    sub_query = Q()
+                    for cat in sub_cats:
+                        sub_query |= Q(x_activitec=cat)
+                    queryset = queryset.filter(sub_query)
             
             if city:
                 queryset = queryset.filter(city__icontains=city)
@@ -472,22 +489,141 @@ class AvailableRecipientsView(APIView):
                 'results': []
             })
 
-
 class ActivitiesListView(APIView):
     """
     GET /api/email-dispatcher/activities/
     Get unique activities from recipients
+    Returns both flat list and structured categories
     """
     def get(self, request):
-        activities = Recipient.objects.filter(
-            x_activitec__isnull=False
-        ).exclude(
-            x_activitec=''
-        ).values_list('x_activitec', flat=True).distinct().order_by('x_activitec')
-        
-        return Response(list(activities))
+        try:
+            # Log that we're entering the view
+            logger.info("=== ActivitiesListView called ===")
+            
+            # Check if Recipient model has data
+            total_recipients = Recipient.objects.count()
+            logger.info(f"Total recipients in DB: {total_recipients}")
+            
+            # Get all unique activities
+            activities = Recipient.objects.filter(
+                x_activitec__isnull=False
+            ).exclude(
+                x_activitec=''
+            ).values_list('x_activitec', flat=True).distinct().order_by('x_activitec')
+            
+            activities_list = list(activities)
+            logger.info(f"Found {len(activities_list)} unique activities")
+            
+            # Log first 10 activities as sample
+            if activities_list:
+                logger.info(f"Sample activities (first 10): {activities_list[:10]}")
+            else:
+                logger.warning("No activities found in database!")
+                
+                # Let's check if there are any recipients at all
+                recipients_with_activity = Recipient.objects.filter(
+                    x_activitec__isnull=False
+                ).exclude(x_activitec='').count()
+                logger.info(f"Recipients with non-null activity: {recipients_with_activity}")
+                
+                # Check if x_activitec field exists
+                try:
+                    field_names = [f.name for f in Recipient._meta.get_fields()]
+                    logger.info(f"Recipient model fields: {field_names}")
+                except:
+                    pass
+            
+            # Also return structured data for the frontend
+            main_categories = set()
+            sub_categories = {}
+            
+            for activity in activities_list:
+                if activity and isinstance(activity, str):
+                    if '/' in activity:
+                        main, sub = activity.split('/', 1)
+                        main = main.strip()
+                        sub = activity.strip()  # Keep full path for subcategory
+                        main_categories.add(main)
+                        
+                        if main not in sub_categories:
+                            sub_categories[main] = []
+                        if sub not in sub_categories[main]:
+                            sub_categories[main].append(sub)
+                    else:
+                        main_categories.add(activity)
+                        if activity not in sub_categories:
+                            sub_categories[activity] = []
+            
+            logger.info(f"Extracted {len(main_categories)} main categories")
+            logger.info(f"Main categories sample: {sorted(list(main_categories))[:10]}")
+            
+            response_data = {
+                'activities': activities_list,
+                'main_categories': sorted(list(main_categories)),
+                'sub_categories': sub_categories
+            }
+            
+            logger.info("=== ActivitiesListView completed successfully ===")
+            return Response(response_data)
+            
+        except Exception as e:
+            logger.error(f"Error in ActivitiesListView: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return Response({
+                'activities': [],
+                'main_categories': [],
+                'sub_categories': {}
+            })
 
-
+class DebugActivitiesView(APIView):
+    """
+    GET /api/email-dispatcher/debug-activities/
+    Debug endpoint to check activities data
+    """
+    def get(self, request):
+        try:
+            # Check database connection
+            from django.db import connections
+            db_conn = connections['default']
+            db_conn.ensure_connection()
+            
+            # Count all recipients
+            total_recipients = Recipient.objects.count()
+            
+            # Count recipients with activity
+            with_activity = Recipient.objects.filter(
+                x_activitec__isnull=False
+            ).exclude(x_activitec='').count()
+            
+            # Get sample of activities
+            sample_activities = list(Recipient.objects.filter(
+                x_activitec__isnull=False
+            ).exclude(
+                x_activitec=''
+            ).values_list('x_activitec', flat=True)[:20])
+            
+            # Get distinct count
+            distinct_activities = Recipient.objects.filter(
+                x_activitec__isnull=False
+            ).exclude(
+                x_activitec=''
+            ).values('x_activitec').distinct().count()
+            
+            return Response({
+                'database_connected': True,
+                'total_recipients': total_recipients,
+                'recipients_with_activity': with_activity,
+                'distinct_activities_count': distinct_activities,
+                'sample_activities': sample_activities,
+                'has_data': with_activity > 0
+            })
+        except Exception as e:
+            return Response({
+                'error': str(e),
+                'database_connected': False
+            })
+            
 class DebugEmailStatusView(APIView):
     """
     GET /api/email-dispatcher/debug-status/
